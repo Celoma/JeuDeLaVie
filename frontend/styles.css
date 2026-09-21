@@ -1,0 +1,16 @@
+:root {
+  color-scheme: dark;
+  font-family: sans-serif;
+  background: #000;
+  color: #fff;
+}
+
+* { box-sizing: border-box; }
+
+html, body { width: 100%; height: 100%; margin: 0; }
+body { overflow: hidden; background: #000; }
+button { border: 1px solid #555; padding: 0.4rem 0.7rem; background: #000; color: #fff; cursor: pointer; }
+button:hover, button:focus-visible { border-color: #fff; }
+output { align-self: center; color: #aaa; font-size: 0.85rem; }
+#board { display: block; width: 100vw; height: 100vh; cursor: crosshair; touch-action: none; }
+.actions { position: fixed; top: 1rem; left: 1rem; z-index: 1; display: flex; gap: 0.5rem; }

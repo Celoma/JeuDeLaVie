@@ -4,21 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jeu de la vie</title>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main>
-    <h1>Jeu de la vie</h1>
-    <p>Prototype frontend pour le backend Go.</p>
-    <p>
-      <button id="step" type="button">Avancer</button>
-      <button id="reset" type="button">Réinitialiser</button>
-    </p>
-    <p>Génération : <strong id="generation">0</strong></p>
-    <table>
-      <tbody id="board" aria-label="Grille du jeu de la vie"></tbody>
-    </table>
-    <p id="status" role="status"></p>
-  </main>
+  <canvas id="board" aria-label="Grille du jeu de la vie"></canvas>
+  <div class="actions">
+    <button id="start" type="button">Commencer</button>
+    <button id="pause" type="button">Pause</button>
+    <button id="reset" type="button">Réinitialiser</button>
+    <output id="generation" aria-label="Génération">Génération : 0</output>
+  </div>
   <script src="/app.js"></script>
 </body>
 </html>

@@ -27,7 +27,7 @@ go test ./...
 
 - `main.go` : serveur HTTP et endpoints API.
 - `game/` : moteur de simulation et tests unitaires.
-- `frontend/` : page HTML et JavaScript sans framework ni style.
+- `frontend/` : canvas plein écran et simulation locale en JavaScript.
 
 ## API
 
@@ -35,4 +35,4 @@ go test ./...
 - `POST /api/tick` calcule la generation suivante.
 - `POST /api/reset` recree une grille aleatoire.
 
-L'etat est conserve en memoire. La grille initiale fait 40 colonnes par 25 lignes.
+Le frontend commence avec une vue de 100 par 100 cellules sur un monde de 10 000 par 10 000 cellules. Les cellules sont ajoutées au clic, la vue se déplace par glisser-déposer et se zoome à la molette. La simulation du frontend fonctionne localement.
