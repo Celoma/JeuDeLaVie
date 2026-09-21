@@ -1,0 +1,77 @@
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"math/rand"
+	"net/http"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"jeu-de-la-vie/game"
+)
+
+const (
+	boardWidth  = 40
+	boardHeight = 25
+)
+
+type server struct {
+	mu    sync.RWMutex
+	board *game.Board
+}
+
+func main() {
+	state := &server{
+		board: game.RandomBoard(boardWidth, boardHeight, 0.25, rand.New(rand.NewSource(time.Now().UnixNano()))),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/state", state.handleState)
+	mux.HandleFunc("/api/tick", state.handleTick)
+	mux.HandleFunc("/api/reset", state.handleReset)
+	mux.Handle("/", http.FileServer(http.Dir(filepath.Join(".", "frontend"))))
+
+	log.Println("Jeu de la vie disponible sur http://localhost:8080")
+	log.Fatal(http.ListenAndServe(":8080", mux))
+}
+
+func (server *server) handleState(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	server.writeBoard(response)
+}
+
+func (server *server) handleTick(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	server.mu.Lock()
+	server.board.Step()
+	server.mu.Unlock()
+	server.writeBoard(response)
+}
+
+func (server *server) handleReset(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	server.mu.Lock()
+	server.board = game.RandomBoard(boardWidth, boardHeight, 0.25, rand.New(rand.NewSource(time.Now().UnixNano())))
+	server.mu.Unlock()
+	server.writeBoard(response)
+}
+
+func (server *server) writeBoard(response http.ResponseWriter) {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	response.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(response).Encode(server.board); err != nil {
+		log.Printf("erreur d'encodage de l'état: %v", err)
+	}
+}

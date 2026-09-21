@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jeu de la vie</title>
+</head>
+<body>
+  <main>
+    <h1>Jeu de la vie</h1>
+    <p>Prototype frontend pour le backend Go.</p>
+    <p>
+      <button id="step" type="button">Avancer</button>
+      <button id="reset" type="button">Réinitialiser</button>
+    </p>
+    <p>Génération : <strong id="generation">0</strong></p>
+    <table>
+      <tbody id="board" aria-label="Grille du jeu de la vie"></tbody>
+    </table>
+    <p id="status" role="status"></p>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
