@@ -1,6 +1,6 @@
-# Jeu de la vie
+# Jeu de contamination
 
-Projet de cours d'optimisation backend en Go autour du jeu de la vie de Conway.
+Projet de cours d'optimisation backend en Go autour d'une simulation de contamination.
 
 ## Prerequis
 
@@ -31,8 +31,8 @@ go test ./...
 
 ## API
 
-- `GET /api/state` retourne la grille courante.
-- `POST /api/tick` calcule la generation suivante.
-- `POST /api/reset` recree une grille aleatoire.
+- `GET /api/state` retourne l'état courant de la contamination.
+- `POST /api/tick` calcule le tour suivant avec les rayons et probabilités de contamination.
+- `POST /api/reset` recrée une population aléatoire avec une personne contaminée initiale.
 
-Le frontend commence avec une vue de 100 par 100 cellules sur un monde de 10 000 par 10 000 cellules. Les cellules sont ajoutées au clic, la vue se déplace par glisser-déposer et se zoome à la molette. La simulation du frontend fonctionne localement.
+Le frontend permet de régler les deux rayons, leurs chances de contamination, la population initiale et le mode de placement manuel. La vue se déplace par glisser-déposer et se zoome à la molette.

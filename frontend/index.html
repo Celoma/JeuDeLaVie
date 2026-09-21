@@ -3,16 +3,57 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Jeu de la vie</title>
+  <title>Jeu de contamination</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <canvas id="board" aria-label="Grille du jeu de la vie"></canvas>
+  <canvas id="board" aria-label="Grille du jeu de contamination"></canvas>
   <div class="actions">
-    <button id="start" type="button">Commencer</button>
-    <button id="pause" type="button">Pause</button>
-    <button id="reset" type="button">Réinitialiser</button>
-    <output id="generation" aria-label="Génération">Génération : 0</output>
+    <div class="toolbar-row">
+      <button id="start" type="button">Commencer</button>
+      <button id="pause" type="button">Pause</button>
+      <button id="reset" type="button">Réinitialiser</button>
+      <output id="generation" aria-label="Génération">Génération : 0</output>
+    </div>
+
+    <div class="toolbar-grid">
+      <label>
+        <span>Placement</span>
+        <select id="placement-mode">
+          <option value="healthy">Personne saine</option>
+          <option value="infected">Personne contaminée</option>
+        </select>
+      </label>
+      <label>
+        <span>Personnes initiales</span>
+        <input id="population" type="number" min="1" step="1" value="900">
+      </label>
+      <label>
+        <span>Contaminés de base</span>
+        <input id="initial-infected" type="number" min="1" step="1" value="1">
+      </label>
+      <label>
+        <span>Rayon proche</span>
+        <input id="close-radius" type="number" min="0" step="1" value="2">
+      </label>
+      <label>
+        <span>Chance proche (%)</span>
+        <input id="close-chance" type="number" min="0" max="100" step="1" value="50">
+      </label>
+      <label>
+        <span>Rayon lointain</span>
+        <input id="far-radius" type="number" min="0" step="1" value="15">
+      </label>
+      <label>
+        <span>Chance lointaine (%)</span>
+        <input id="far-chance" type="number" min="0" max="100" step="1" value="15">
+      </label>
+    </div>
+
+    <div class="stats" aria-live="polite">
+      <output id="healthy-count">Sains : 0</output>
+      <output id="infected-count">Contaminés : 0</output>
+    </div>
   </div>
   <script src="/app.js"></script>
 </body>

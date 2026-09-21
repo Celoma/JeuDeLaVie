@@ -20,12 +20,21 @@ const (
 type server struct {
 	mu    sync.RWMutex
 	board *game.Board
+	rng   *rand.Rand
+	rules game.ContaminationConfig
 }
 
 func main() {
 	state := &server{
-		board: game.RandomBoard(boardWidth, boardHeight, 0.25, rand.New(rand.NewSource(time.Now().UnixNano()))),
+		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
+		rules: game.ContaminationConfig{
+			CloseRadius: 2,
+			CloseChance: 0.5,
+			FarRadius:   15,
+			FarChance:   0.15,
+		},
 	}
+	state.board = game.RandomBoard(boardWidth, boardHeight, 0.25, state.rng)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/state", state.handleState)
@@ -33,7 +42,7 @@ func main() {
 	mux.HandleFunc("/api/reset", state.handleReset)
 	mux.Handle("/", http.FileServer(http.Dir(filepath.Join(".", "frontend"))))
 
-	log.Println("Jeu de la vie disponible sur http://localhost:8080")
+	log.Println("Jeu de contamination disponible sur http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }
 
@@ -51,7 +60,7 @@ func (server *server) handleTick(response http.ResponseWriter, request *http.Req
 		return
 	}
 	server.mu.Lock()
-	server.board.Step()
+	server.board.Step(server.rules, server.rng)
 	server.mu.Unlock()
 	server.writeBoard(response)
 }
@@ -62,7 +71,7 @@ func (server *server) handleReset(response http.ResponseWriter, request *http.Re
 		return
 	}
 	server.mu.Lock()
-	server.board = game.RandomBoard(boardWidth, boardHeight, 0.25, rand.New(rand.NewSource(time.Now().UnixNano())))
+	server.board = game.RandomBoard(boardWidth, boardHeight, 0.25, server.rng)
 	server.mu.Unlock()
 	server.writeBoard(response)
 }
