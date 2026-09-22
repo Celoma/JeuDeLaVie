@@ -5,6 +5,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -38,12 +39,37 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/state", state.handleState)
+	mux.HandleFunc("/api/map", handleMap)
 	mux.HandleFunc("/api/tick", state.handleTick)
 	mux.HandleFunc("/api/reset", state.handleReset)
 	mux.Handle("/", http.FileServer(http.Dir(filepath.Join(".", "frontend"))))
 
 	log.Println("Jeu de contamination disponible sur http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))
+}
+
+func handleMap(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	file, err := os.Open("generated_map.json")
+	if err != nil {
+		http.Error(response, "carte introuvable", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+
+	populationMap, err := game.ReadPopulationMap(file)
+	if err != nil {
+		http.Error(response, "carte JSON invalide", http.StatusInternalServerError)
+		return
+	}
+	response.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(response).Encode(populationMap); err != nil {
+		log.Printf("erreur d'encodage de la carte: %v", err)
+	}
 }
 
 func (server *server) handleState(response http.ResponseWriter, request *http.Request) {

@@ -3,6 +3,7 @@ const context = canvas.getContext("2d");
 const startButton = document.querySelector("#start");
 const pauseButton = document.querySelector("#pause");
 const resetButton = document.querySelector("#reset");
+const loadMapButton = document.querySelector("#load-map");
 const generationElement = document.querySelector("#generation");
 const healthyCountElement = document.querySelector("#healthy-count");
 const infectedCountElement = document.querySelector("#infected-count");
@@ -14,7 +15,7 @@ const farChanceInput = document.querySelector("#far-chance");
 const populationInput = document.querySelector("#population");
 const initialInfectedInput = document.querySelector("#initial-infected");
 
-const worldSize = 400;
+let worldSize = 400;
 const initialViewSize = 100;
 const minCellSize = 0.035;
 const maxCellSize = 80;
@@ -313,7 +314,35 @@ resetButton.addEventListener("click", () => {
   populateWorld();
 });
 
+loadMapButton.addEventListener("click", async () => {
+  running = false;
+  cancelAnimationFrame(animationFrame);
+  loadMapButton.disabled = true;
+
+  try {
+    const response = await fetch("/api/map");
+    if (!response.ok) throw new Error("Impossible de charger la carte");
+    const map = await response.json();
+    worldSize = map.width;
+    clearPopulation();
+    generation = 0;
+    for (const person of map.people) {
+      if (!Number.isInteger(person.x) || !Number.isInteger(person.y)) continue;
+      const key = cellKey(person.x, person.y);
+      if (person.infected) infectedCells.add(key);
+      else healthyCells.add(key);
+    }
+    cameraX = worldSize / 2;
+    cameraY = map.height / 2;
+    updateStats();
+    render();
+  } catch (error) {
+    console.error(error);
+  } finally {
+    loadMapButton.disabled = false;
+  }
+});
+
 window.addEventListener("resize", resizeCanvas);
-updateStats();
-populateWorld();
 resizeCanvas();
+loadMapButton.click();
