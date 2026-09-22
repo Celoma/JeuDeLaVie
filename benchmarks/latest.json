@@ -1,0 +1,33 @@
+{
+  "generatedAt": "2026-09-22T00:00:00Z",
+  "configuration": {
+    "runs": 10,
+    "warmup": 2,
+    "sampleCount": 10,
+    "command": "go test ./game -run '^$' -bench '^BenchmarkBoardStep$' -benchmem -count 1",
+    "goos": "linux",
+    "goarch": "amd64",
+    "cpu": "11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz"
+  },
+  "results": [
+    {
+      "name": "BenchmarkBoardStep",
+      "meanSeconds": 0.0005483738,
+      "medianSeconds": 0.000562585,
+      "minSeconds": 0.000483906,
+      "maxSeconds": 0.000628937,
+      "p95Seconds": 0.0006051,
+      "p99Seconds": 0.0006051,
+      "stddevSeconds": 0.000054480827,
+      "throughputOpsPerSecond": 1823.960716,
+      "nsPerOp": 548373.8,
+      "bytesPerOp": 397529,
+      "allocsPerOp": 16,
+      "notes": [
+        "Mesure du moteur Go sur 10 exécutions indépendantes.",
+        "La latence API est mesurée à part dans le frontend, sans rendu canvas.",
+        "Les métriques CPU bas niveau, GC détaillé, I/O, réseau et base de données ne sont pas instrumentées dans ce benchmark."
+      ]
+    }
+  ]
+}

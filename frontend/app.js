@@ -7,6 +7,8 @@
   const statusLabel = document.querySelector('#status-label');
   const zoomValue = document.querySelector('#zoom-value');
   const coordinates = document.querySelector('#coordinates');
+  const tabButtons = document.querySelectorAll('[data-tab-button]');
+  const tabPanels = document.querySelectorAll('[data-tab-panel]');
   const context = canvas.getContext('2d');
 
   const view = { scale: 1, offsetX: 0, offsetY: 0, dragging: false, pointerX: 0, pointerY: 0 };
@@ -18,10 +20,27 @@
   let pendingSimulationStats = null;
   let simulationRenderScheduled = false;
   let devicePixelRatio = window.devicePixelRatio || 1;
+  const apiLatencySamples = {
+    simulation: [],
+    tick: [],
+    reset: [],
+  };
 
   const colors = { background: '#e6efeb', grid: '#cbded8', healthy: '#65b8aa', infected: '#e76552', city: '#dfa83c', igloo: '#76a3ae' };
 
   function setText(selector, value) { document.querySelector(selector).textContent = value; }
+
+  function setSidebarTab(tabName) {
+    tabButtons.forEach((button) => {
+      const isActive = button.dataset.tabButton === tabName;
+      button.classList.toggle('active', isActive);
+      button.setAttribute('aria-selected', String(isActive));
+    });
+    tabPanels.forEach((panel) => {
+      const isVisible = panel.dataset.tabPanel === tabName;
+      panel.classList.toggle('hidden', !isVisible);
+    });
+  }
 
   function resizeCanvas() {
     const bounds = canvasWrap.getBoundingClientRect();
@@ -136,26 +155,110 @@
     return `${(seconds * 1000).toFixed(3)} ms`;
   }
 
+  function formatDurationMs(milliseconds) {
+    if (!Number.isFinite(milliseconds)) return '--';
+    return `${milliseconds.toFixed(milliseconds >= 100 ? 1 : 2)} ms`;
+  }
+
+  function percentile(sortedValues, ratio) {
+    if (!sortedValues.length) return 0;
+    if (sortedValues.length === 1) return sortedValues[0];
+    const index = (sortedValues.length - 1) * ratio;
+    const lowerIndex = Math.floor(index);
+    const upperIndex = Math.ceil(index);
+    if (lowerIndex === upperIndex) return sortedValues[lowerIndex];
+    const weight = index - lowerIndex;
+    return sortedValues[lowerIndex] + ((sortedValues[upperIndex] - sortedValues[lowerIndex]) * weight);
+  }
+
+  function summarizeSamples(samples) {
+    if (!samples.length) return null;
+    const sorted = [...samples].sort((left, right) => left - right);
+    const total = sorted.reduce((sum, sample) => sum + sample, 0);
+    const mean = total / sorted.length;
+    const variance = sorted.reduce((sum, sample) => sum + ((sample - mean) ** 2), 0) / sorted.length;
+    return {
+      count: sorted.length,
+      mean,
+      median: percentile(sorted, 0.5),
+      p95: percentile(sorted, 0.95),
+      p99: percentile(sorted, 0.99),
+      min: sorted[0],
+      max: sorted[sorted.length - 1],
+      stddev: Math.sqrt(variance),
+      last: samples[samples.length - 1],
+    };
+  }
+
+  function recordApiLatency(key, milliseconds) {
+    if (!apiLatencySamples[key]) return;
+    apiLatencySamples[key].push(milliseconds);
+    if (apiLatencySamples[key].length > 25) apiLatencySamples[key].shift();
+    updateApiBenchmarkMetrics();
+  }
+
   function updateBenchmark(report) {
     const result = report.results && report.results[0];
     if (!result) return;
     setText('#benchmark-mean', formatMilliseconds(result.meanSeconds));
     const rows = [
-      ['Médiane', formatMilliseconds(result.medianSeconds)],
-      ['Minimum', formatMilliseconds(result.minSeconds)],
+      ['P50', formatMilliseconds(result.medianSeconds)],
+      ['P95', formatMilliseconds(result.p95Seconds ?? result.maxSeconds)],
+      ['P99', formatMilliseconds(result.p99Seconds ?? result.maxSeconds)],
       ['Maximum', formatMilliseconds(result.maxSeconds)],
+      ['Latence/op', `${Math.round(result.nsPerOp).toLocaleString('fr-FR')} ns/op`],
+      ['Débit', `${Math.round(result.throughputOpsPerSecond).toLocaleString('fr-FR')} op/s`],
+      ['Mémoire', `${Math.round(result.bytesPerOp).toLocaleString('fr-FR')} B/op`],
+      ['Allocations', `${Math.round(result.allocsPerOp).toLocaleString('fr-FR')} allocs/op`],
       ['Écart-type', formatMilliseconds(result.stddevSeconds)],
     ];
     document.querySelector('#benchmark-table').innerHTML = rows.map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`).join('');
-    setText('#benchmark-meta', `${report.configuration.runs} runs · ${report.configuration.warmup} warmup`);
+    const metaParts = [
+      `${report.configuration.runs} runs`,
+      `${report.configuration.warmup} warmup`,
+    ];
+    if (report.configuration.sampleCount) metaParts.push(`${report.configuration.sampleCount} samples`);
+    if (report.configuration.goos && report.configuration.goarch) metaParts.push(`${report.configuration.goos}/${report.configuration.goarch}`);
+    if (report.configuration.command) metaParts.push(report.configuration.command);
+    if (report.configuration.cpu) metaParts.push(report.configuration.cpu);
+    setText('#benchmark-meta', metaParts.join(' · '));
     document.querySelector('#benchmark-empty').classList.add('hidden');
     document.querySelector('#benchmark-content').classList.remove('hidden');
   }
 
+  function updateApiBenchmarkMetrics() {
+    const rows = [
+      ['GET /api/simulation', summarizeSamples(apiLatencySamples.simulation)],
+      ['POST /api/tick', summarizeSamples(apiLatencySamples.tick)],
+      ['POST /api/reset', summarizeSamples(apiLatencySamples.reset)],
+    ];
+    document.querySelector('#benchmark-api-table').innerHTML = rows.map(([label, stats]) => {
+      if (!stats) {
+        return `<tr><td>${label}</td><td>--</td><td>--</td><td>--</td></tr>`;
+      }
+      return `<tr><td>${label}</td><td>${formatDurationMs(stats.mean)}</td><td>${formatDurationMs(stats.p95)}</td><td>${formatDurationMs(stats.last)}</td></tr>`;
+    }).join('');
+    const summary = summarizeSamples([...(apiLatencySamples.simulation), ...(apiLatencySamples.tick), ...(apiLatencySamples.reset)]);
+    if (!summary) {
+      setText('#benchmark-api-meta', 'Aucun appel API mesuré pour le moment.');
+      return;
+    }
+    setText('#benchmark-api-meta', `${summary.count} appels mesurés · moyenne ${formatDurationMs(summary.mean)} · P95 ${formatDurationMs(summary.p95)} · sans rendu`);
+  }
+
+  async function fetchJsonTimed(url, options, sampleKey) {
+    const startedAt = performance.now();
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) throw new Error(`${url} HTTP ${response.status}`);
+      return await response.json();
+    } finally {
+      recordApiLatency(sampleKey, performance.now() - startedAt);
+    }
+  }
+
   async function loadSimulation() {
-    const response = await fetch('/api/simulation');
-    if (!response.ok) throw new Error(`simulation HTTP ${response.status}`);
-    const simulation = await response.json();
+    const simulation = await fetchJsonTimed('/api/simulation', undefined, 'simulation');
     if (simulation.map) {
       map = simulation.map;
       updateStats();
@@ -169,15 +272,14 @@
     const response = await fetch('/api/benchmarks');
     if (!response.ok) return;
     updateBenchmark(await response.json());
+    updateApiBenchmarkMetrics();
   }
 
   async function advanceSimulation() {
     if (tickInFlight) return;
     tickInFlight = true;
     try {
-      const response = await fetch('/api/tick', { method: 'POST' });
-      if (!response.ok) throw new Error(`tick HTTP ${response.status}`);
-      const board = await response.json();
+      const board = await fetchJsonTimed('/api/tick', { method: 'POST' }, 'tick');
       if (board.people) {
         map = board;
         updateStats();
@@ -193,9 +295,7 @@
 
   async function resetSimulation() {
     pauseSimulation();
-    const response = await fetch('/api/reset', { method: 'POST' });
-    if (!response.ok) throw new Error(`reset HTTP ${response.status}`);
-    const board = await response.json();
+    const board = await fetchJsonTimed('/api/reset', { method: 'POST' }, 'reset');
     if (board.people) {
       map = board;
       updateStats();
@@ -352,7 +452,15 @@
   document.querySelector('#reset-button').addEventListener('click', () => resetSimulation().catch(console.error));
   document.querySelector('#apply-settings').addEventListener('click', () => applySettings().catch(console.error));
   document.querySelector('#speed-slider').addEventListener('input', updateSpeedLabel);
+  tabButtons.forEach((button) => button.addEventListener('click', () => setSidebarTab(button.dataset.tabButton)));
+  setSidebarTab('global');
   window.addEventListener('resize', resizeCanvas);
+  if (window.ResizeObserver) {
+    const canvasResizeObserver = new ResizeObserver(() => {
+      if (map) resizeCanvas();
+    });
+    canvasResizeObserver.observe(canvasWrap);
+  }
 
   async function loadMap() {
     try {

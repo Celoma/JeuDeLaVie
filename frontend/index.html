@@ -30,43 +30,51 @@
           <p>Explorez la carte générée et repérez les foyers contaminés parmi les familles et les implantations.</p>
         </div>
 
-        <div class="metrics" aria-label="Statistiques de la carte">
-          <div class="metric metric-wide">
-            <span class="metric-label">Territoire</span>
-            <strong id="map-size">--</strong>
+        <div class="sidebar-tabs" role="tablist" aria-label="Sections du panneau de commande">
+          <button type="button" class="sidebar-tab active" id="tab-global" data-tab-button="global" role="tab" aria-selected="true" aria-controls="panel-global">Global</button>
+          <button type="button" class="sidebar-tab" id="tab-settings" data-tab-button="settings" role="tab" aria-selected="false" aria-controls="panel-settings">Paramètres</button>
+          <button type="button" class="sidebar-tab" id="tab-performance" data-tab-button="performance" role="tab" aria-selected="false" aria-controls="panel-performance">Performance</button>
+        </div>
+
+        <div class="sidebar-panel tab-panel" id="panel-global" data-tab-panel="global" role="tabpanel" aria-labelledby="tab-global">
+          <div class="metrics" aria-label="Statistiques de la carte">
+            <div class="metric metric-wide">
+              <span class="metric-label">Territoire</span>
+              <strong id="map-size">--</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Population</span>
+              <strong id="people-count">--</strong>
+            </div>
+            <div class="metric metric-infected">
+              <span class="metric-label">Infectés</span>
+              <strong id="infected-count">--</strong>
+            </div>
           </div>
-          <div class="metric">
-            <span class="metric-label">Population</span>
-            <strong id="people-count">--</strong>
-          </div>
-          <div class="metric metric-infected">
-            <span class="metric-label">Infectés</span>
-            <strong id="infected-count">--</strong>
+
+          <div class="simulation-panel">
+            <div class="panel-heading">
+              <p class="section-kicker">Partie en cours</p>
+              <strong>Propagation</strong>
+            </div>
+            <div class="simulation-line"><span>Tour</span><strong id="simulation-tick">0</strong></div>
+            <div class="simulation-line"><span>Personnes infectées</span><strong id="simulation-infected">--</strong></div>
+            <div class="simulation-line"><span>Personnes mortes</span><strong id="simulation-dead">--</strong></div>
+            <div class="simulation-line"><span>Personnes immunisées</span><strong id="simulation-immune">--</strong></div>
+            <label class="speed-control" for="speed-slider">
+              <span><span>Vitesse</span><strong id="speed-label">1 tour/s</strong></span>
+              <input id="speed-slider" type="range" min="0" max="10" step="1" value="1">
+              <span class="speed-range"><span>Sans limite</span><span>10 tours/s</span></span>
+            </label>
+            <div class="simulation-actions">
+              <button type="button" class="tool-button primary-tool" id="start-button">Commencer</button>
+              <button type="button" class="tool-button" id="pause-button" disabled>Pause</button>
+              <button type="button" class="tool-button" id="reset-button">Réinitialiser</button>
+            </div>
           </div>
         </div>
 
-        <div class="simulation-panel">
-          <div class="panel-heading">
-            <p class="section-kicker">Partie en cours</p>
-            <strong>Propagation</strong>
-          </div>
-          <div class="simulation-line"><span>Tour</span><strong id="simulation-tick">0</strong></div>
-          <div class="simulation-line"><span>Cellules infectées</span><strong id="simulation-infected">--</strong></div>
-          <div class="simulation-line"><span>Cellules mortes</span><strong id="simulation-dead">--</strong></div>
-          <div class="simulation-line"><span>Cellules immunisées</span><strong id="simulation-immune">--</strong></div>
-          <label class="speed-control" for="speed-slider">
-            <span><span>Vitesse</span><strong id="speed-label">1 tour/s</strong></span>
-            <input id="speed-slider" type="range" min="0" max="10" step="1" value="1">
-            <span class="speed-range"><span>Sans limite</span><span>10 tours/s</span></span>
-          </label>
-          <div class="simulation-actions">
-            <button type="button" class="tool-button primary-tool" id="start-button">Commencer</button>
-            <button type="button" class="tool-button" id="pause-button" disabled>Pause</button>
-            <button type="button" class="tool-button" id="reset-button">Réinitialiser</button>
-          </div>
-        </div>
-
-        <div class="settings-panel">
+        <div class="sidebar-panel settings-panel tab-panel hidden" id="panel-settings" data-tab-panel="settings" role="tabpanel" aria-labelledby="tab-settings">
           <div class="panel-heading">
             <p class="section-kicker">Paramètres</p>
             <strong>Nouvelle partie</strong>
@@ -85,20 +93,31 @@
           <span class="settings-feedback" id="settings-feedback"></span>
         </div>
 
-        <div class="benchmark-panel">
+        <div class="sidebar-panel benchmark-panel tab-panel hidden" id="panel-performance" data-tab-panel="performance" role="tabpanel" aria-labelledby="tab-performance">
           <div class="panel-heading">
             <p class="section-kicker">Performance</p>
             <strong>Dernier benchmark</strong>
           </div>
           <div id="benchmark-empty" class="benchmark-empty">Aucun rapport disponible.</div>
           <div id="benchmark-content" class="benchmark-content hidden">
-            <div class="benchmark-highlight"><span>Moyenne</span><strong id="benchmark-mean">--</strong></div>
+            <div class="benchmark-highlight"><span>Latence moyenne</span><strong id="benchmark-mean">--</strong></div>
             <div class="benchmark-table-wrap">
               <table>
                 <thead><tr><th>Mesure</th><th>Valeur</th></tr></thead>
                 <tbody id="benchmark-table"></tbody>
               </table>
             </div>
+            <div class="benchmark-block">
+              <p class="benchmark-subtitle">Appels API mesurés en direct</p>
+              <div class="benchmark-table-wrap">
+                <table>
+                  <thead><tr><th>Appel</th><th>Moyenne</th><th>P95</th><th>Dernier</th></tr></thead>
+                  <tbody id="benchmark-api-table"></tbody>
+                </table>
+              </div>
+              <span class="benchmark-meta" id="benchmark-api-meta">--</span>
+            </div>
+            <p class="benchmark-note">Mesures entre l'appel réseau et la réponse JSON, sans le rendu du canvas.</p>
             <span class="benchmark-meta" id="benchmark-meta">--</span>
           </div>
         </div>

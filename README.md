@@ -63,12 +63,12 @@ curl -X PUT http://localhost:8080/api/rules `
 go test ./...
 ```
 
-## Benchmark Hyperfine
+## Benchmark performance
 
-Le benchmark `BenchmarkBoardStep` mesure une transition complète du moteur Go avec des rayons de test un peu plus larges (`4` proche et `20` lointain). Pour comparer les performances après une optimisation :
+Le benchmark `BenchmarkBoardStep` mesure une transition complète du moteur Go avec des rayons de test un peu plus larges (`4` proche et `20` lointain). Le script lance plusieurs exécutions indépendantes pour calculer les statistiques affichées dans le front : latence moyenne, médiane, P95/P99, max, `ns/op`, `B/op`, `allocs/op` et débit.
 
 ```bash
-hyperfine --warmup 2 --runs 10 "go test ./game -run '^$' -bench '^BenchmarkBoardStep$' -benchtime=1s"
+go test ./game -run '^$' -bench '^BenchmarkBoardStep$' -benchmem -count 1
 ```
 
 Ou, sous PowerShell :
@@ -77,7 +77,7 @@ Ou, sous PowerShell :
 .\benchmark.ps1
 ```
 
-Le script crée `benchmarks/latest.json` pour l'application et `benchmarks/latest.md` pour une lecture humaine sous forme de tableau. Le panneau « Dernier benchmark » de l'interface affiche automatiquement le contenu du rapport JSON au prochain chargement.
+Le script crée `benchmarks/latest.json` pour l'application et `benchmarks/latest.md` pour une lecture humaine sous forme de tableau. Le panneau « Dernier benchmark » de l'interface affiche automatiquement le contenu du rapport JSON au prochain chargement, puis ajoute des latences API mesurées en direct pour `/api/simulation`, `/api/tick` et `/api/reset`.
 
 Sur Windows, Hyperfine peut être installé avec :
 
@@ -88,7 +88,7 @@ winget install sharkdp.hyperfine
 ## Structure
 
 - `main.go` : serveur HTTP et endpoints API.
-- `benchmark.ps1` : exécution Hyperfine et génération des rapports de mesure.
+- `benchmark.ps1` : exécution des benchmarks Go et génération des rapports de mesure.
 - `benchmarks/` : rapport JSON consommé par l'application et rapport Markdown lisible.
 - `game/` : moteur de simulation, règles, tests unitaires et benchmarks.
 - `frontend/` : canvas plein écran et simulation locale en JavaScript.
