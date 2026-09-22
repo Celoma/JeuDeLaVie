@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func BenchmarkBoardStep(b *testing.B) {
+func BenchmarkTick(b *testing.B) {
 	rules := ContaminationConfig{CloseRadius: 4, CloseChance: 0.5, FarRadius: 20, FarChance: 0.15}
 	board := RandomBoard(200, 200, 0.25, rand.New(rand.NewSource(42)))
 	source := rand.New(rand.NewSource(42))

@@ -54,26 +54,27 @@ function Get-Stats {
     }
 }
 
-$benchmarkCommand = "go test ./game -run '^$' -bench '^BenchmarkBoardStep$' -benchmem -count 1"
+$benchmarkName = 'BenchmarkTick'
+$benchmarkCommand = "go test ./game -run '^$' -bench '^$benchmarkName`$' -benchmem -count 1"
 $benchmarks = @()
 $goos = $null
 $goarch = $null
 $cpu = $null
 
 for ($warmupIndex = 1; $warmupIndex -le $Warmup; $warmupIndex++) {
-    & go test ./game -run '^$' -bench '^BenchmarkBoardStep$' -benchmem -count 1 | Out-Null
+    & go test ./game -run '^$' -bench "^$benchmarkName`$" -benchmem -count 1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Warmup benchmark failed"
     }
 }
 
 for ($runIndex = 1; $runIndex -le $Runs; $runIndex++) {
-    $output = & go test ./game -run '^$' -bench '^BenchmarkBoardStep$' -benchmem -count 1 2>&1
+    $output = & go test ./game -run '^$' -bench "^$benchmarkName`$" -benchmem -count 1 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Benchmark run $runIndex failed"
     }
 
-    $benchmarkLine = $output | Select-String '^BenchmarkBoardStep'
+    $benchmarkLine = $output | Select-String "^$benchmarkName"
     if (-not $benchmarkLine) {
         throw "BenchmarkBoardStep line missing from run $runIndex"
     }
@@ -147,11 +148,23 @@ New-Item -ItemType Directory -Force -Path $benchmarksDir | Out-Null
 
 $jsonPath = Join-Path $benchmarksDir 'latest.json'
 $mdPath = Join-Path $benchmarksDir 'latest.md'
+$timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssfff')
+$archiveMdPath = Join-Path $benchmarksDir "benchmark-$timestamp.md"
+$profilePath = Join-Path $benchmarksDir "cpu-$timestamp.prof"
+
+$profileOutput = & go test ./game -run '^$' -bench "^$benchmarkName`$" -benchmem -count 1 -cpuprofile $profilePath 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw "CPU profile failed: $($profileOutput -join [Environment]::NewLine)"
+}
 
 $report | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding utf8
 
 $markdown = @"
 # Benchmark le plus récent
+
+Généré le : $($report.generatedAt) (UTC)
+
+Profil CPU : ``$([System.IO.Path]::GetFileName($profilePath))``
 
 | Mesure | Valeur |
 | --- | ---: |
@@ -175,5 +188,6 @@ $markdown = @"
 "@
 
 $markdown | Set-Content -Path $mdPath -Encoding utf8
+$markdown | Set-Content -Path $archiveMdPath -Encoding utf8
 
-Write-Host "Benchmarks écrits dans $jsonPath et $mdPath"
+Write-Host "Benchmarks écrits dans $jsonPath, $mdPath, $archiveMdPath et $profilePath"

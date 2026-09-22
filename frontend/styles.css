@@ -48,6 +48,7 @@ h1 { margin-bottom: 0; font-size: clamp(21px, 3vw, 30px); letter-spacing: -0.04e
 .sidebar-tab.active { color: white; background: var(--teal); }
 .tab-panel.hidden { display: none; }
 .tab-panel { display: block; min-height: 0; }
+.sidebar.performance-active .legend { display: none; }
 .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin: 0 -24px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--line); }
 .metric { min-height: 79px; padding: 14px 13px; background: var(--panel); }
 .metric-wide { grid-column: 1 / -1; }

@@ -65,10 +65,10 @@ go test ./...
 
 ## Benchmark performance
 
-Le benchmark `BenchmarkBoardStep` mesure une transition complète du moteur Go avec des rayons de test un peu plus larges (`4` proche et `20` lointain). Le script lance plusieurs exécutions indépendantes pour calculer les statistiques affichées dans le front : latence moyenne, médiane, P95/P99, max, `ns/op`, `B/op`, `allocs/op` et débit.
+Le microbenchmark `BenchmarkTick` mesure uniquement une transition complète du moteur Go (`Board.Step`), avec des rayons de test un peu plus larges (`4` proche et `20` lointain), sans HTTP ni rendu. Le script lance plusieurs exécutions indépendantes pour calculer les statistiques affichées dans le front et produit aussi un profil CPU Go `cpu-YYYYMMDD-HHmmssfff.prof`.
 
 ```bash
-go test ./game -run '^$' -bench '^BenchmarkBoardStep$' -benchmem -count 1
+go test ./game -run '^$' -bench '^BenchmarkTick$' -benchmem -count 1
 ```
 
 Ou, sous PowerShell :
@@ -77,7 +77,13 @@ Ou, sous PowerShell :
 .\benchmark.ps1
 ```
 
-Le script crée `benchmarks/latest.json` pour l'application et `benchmarks/latest.md` pour une lecture humaine sous forme de tableau. Le panneau « Dernier benchmark » de l'interface affiche automatiquement le contenu du rapport JSON au prochain chargement, puis ajoute des latences API mesurées en direct pour `/api/simulation`, `/api/tick` et `/api/reset`.
+Le script crée `benchmarks/latest.json` pour l'application, `benchmarks/latest.md` pour le dernier résultat et une archive Markdown horodatée `benchmarks/benchmark-YYYYMMDD-HHmmssfff.md` à chaque exécution. Le panneau « Dernier benchmark » de l'interface affiche automatiquement le contenu du rapport JSON au prochain chargement, puis ajoute des latences API mesurées en direct pour `/api/simulation`, `/api/tick` et `/api/reset`.
+
+Pour analyser le profil CPU :
+
+```powershell
+go tool pprof -top benchmarks\cpu-YYYYMMDD-HHmmssfff.prof
+```
 
 Sur Windows, Hyperfine peut être installé avec :
 

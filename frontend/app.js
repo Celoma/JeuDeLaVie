@@ -31,6 +31,7 @@
   function setText(selector, value) { document.querySelector(selector).textContent = value; }
 
   function setSidebarTab(tabName) {
+    document.querySelector('.sidebar').classList.toggle('performance-active', tabName === 'performance');
     tabButtons.forEach((button) => {
       const isActive = button.dataset.tabButton === tabName;
       button.classList.toggle('active', isActive);
