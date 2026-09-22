@@ -1,61 +1,149 @@
 <!doctype html>
 <html lang="fr">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Jeu de contamination</title>
+  <title>Atlas de contamination</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <canvas id="board" aria-label="Grille du jeu de contamination"></canvas>
-  <div class="actions">
-    <div class="toolbar-row">
-      <button id="start" type="button">Commencer</button>
-      <button id="pause" type="button">Pause</button>
-      <button id="reset" type="button">Réinitialiser</button>
-      <button id="load-map" type="button">Charger la carte JSON</button>
-      <output id="generation" aria-label="Génération">Génération : 0</output>
-    </div>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true">+</span>
+        <div>
+          <p class="eyebrow">Jeu de la vie</p>
+          <h1>Atlas de contamination</h1>
+        </div>
+      </div>
+      <div class="status" id="status" data-state="loading">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="status-label">Chargement de la carte</span>
+      </div>
+    </header>
 
-    <div class="toolbar-grid">
-      <label>
-        <span>Placement</span>
-        <select id="placement-mode">
-          <option value="healthy">Personne saine</option>
-          <option value="infected">Personne contaminée</option>
-        </select>
-      </label>
-      <label>
-        <span>Personnes initiales</span>
-        <input id="population" type="number" min="1" step="1" value="900">
-      </label>
-      <label>
-        <span>Contaminés de base</span>
-        <input id="initial-infected" type="number" min="1" step="1" value="1">
-      </label>
-      <label>
-        <span>Rayon proche</span>
-        <input id="close-radius" type="number" min="0" step="1" value="2">
-      </label>
-      <label>
-        <span>Chance proche (%)</span>
-        <input id="close-chance" type="number" min="0" max="100" step="1" value="50">
-      </label>
-      <label>
-        <span>Rayon lointain</span>
-        <input id="far-radius" type="number" min="0" step="1" value="15">
-      </label>
-      <label>
-        <span>Chance lointaine (%)</span>
-        <input id="far-chance" type="number" min="0" max="100" step="1" value="15">
-      </label>
-    </div>
+    <section class="workspace" aria-label="Carte de population">
+      <aside class="sidebar">
+        <div class="intro">
+          <p class="section-kicker">Vue stratégique</p>
+          <h2>Une population, un territoire.</h2>
+          <p>Explorez la carte générée et repérez les foyers contaminés parmi les familles et les implantations.</p>
+        </div>
 
-    <div class="stats" aria-live="polite">
-      <output id="healthy-count">Sains : 0</output>
-      <output id="infected-count">Contaminés : 0</output>
-    </div>
-  </div>
+        <div class="metrics" aria-label="Statistiques de la carte">
+          <div class="metric metric-wide">
+            <span class="metric-label">Territoire</span>
+            <strong id="map-size">--</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Population</span>
+            <strong id="people-count">--</strong>
+          </div>
+          <div class="metric metric-infected">
+            <span class="metric-label">Infectés</span>
+            <strong id="infected-count">--</strong>
+          </div>
+        </div>
+
+        <div class="simulation-panel">
+          <div class="panel-heading">
+            <p class="section-kicker">Partie en cours</p>
+            <strong>Propagation</strong>
+          </div>
+          <div class="simulation-line"><span>Tour</span><strong id="simulation-tick">0</strong></div>
+          <div class="simulation-line"><span>Cellules infectées</span><strong id="simulation-infected">--</strong></div>
+          <div class="simulation-line"><span>Cellules mortes</span><strong id="simulation-dead">--</strong></div>
+          <div class="simulation-line"><span>Cellules immunisées</span><strong id="simulation-immune">--</strong></div>
+          <label class="speed-control" for="speed-slider">
+            <span><span>Vitesse</span><strong id="speed-label">1 tour/s</strong></span>
+            <input id="speed-slider" type="range" min="0" max="10" step="1" value="1">
+            <span class="speed-range"><span>Sans limite</span><span>10 tours/s</span></span>
+          </label>
+          <div class="simulation-actions">
+            <button type="button" class="tool-button primary-tool" id="start-button">Commencer</button>
+            <button type="button" class="tool-button" id="pause-button" disabled>Pause</button>
+            <button type="button" class="tool-button" id="reset-button">Réinitialiser</button>
+          </div>
+        </div>
+
+        <div class="settings-panel">
+          <div class="panel-heading">
+            <p class="section-kicker">Paramètres</p>
+            <strong>Nouvelle partie</strong>
+          </div>
+          <label class="setting-field"><span>Seed</span><input id="seed-input" type="number" step="1" value="42"></label>
+          <div class="settings-grid">
+            <label class="setting-field"><span>Rayon proche</span><input id="close-radius-input" type="number" min="0" step="1" value="2"></label>
+            <label class="setting-field"><span>Rayon lointain</span><input id="far-radius-input" type="number" min="0" step="1" value="15"></label>
+            <label class="setting-field"><span>Chance proche</span><input id="close-chance-input" type="number" min="0" max="1" step="0.01" value="0.5"></label>
+            <label class="setting-field"><span>Chance lointaine</span><input id="far-chance-input" type="number" min="0" max="1" step="0.01" value="0.15"></label>
+            <label class="setting-field"><span>Chance de mort</span><input id="death-chance-input" type="number" min="0" max="1" step="0.01" value="0.02"></label>
+            <label class="setting-field"><span>Chance de guérison</span><input id="recovery-chance-input" type="number" min="0" max="1" step="0.01" value="0.05"></label>
+            <label class="setting-field"><span>Chance d'immunité</span><input id="immunity-chance-input" type="number" min="0" max="1" step="0.01" value="0.8"></label>
+          </div>
+          <button type="button" class="tool-button primary-tool settings-submit" id="apply-settings">Appliquer et recommencer</button>
+          <span class="settings-feedback" id="settings-feedback"></span>
+        </div>
+
+        <div class="benchmark-panel">
+          <div class="panel-heading">
+            <p class="section-kicker">Performance</p>
+            <strong>Dernier benchmark</strong>
+          </div>
+          <div id="benchmark-empty" class="benchmark-empty">Aucun rapport disponible.</div>
+          <div id="benchmark-content" class="benchmark-content hidden">
+            <div class="benchmark-highlight"><span>Moyenne</span><strong id="benchmark-mean">--</strong></div>
+            <div class="benchmark-table-wrap">
+              <table>
+                <thead><tr><th>Mesure</th><th>Valeur</th></tr></thead>
+                <tbody id="benchmark-table"></tbody>
+              </table>
+            </div>
+            <span class="benchmark-meta" id="benchmark-meta">--</span>
+          </div>
+        </div>
+
+        <div class="legend">
+          <p class="section-kicker">Légende</p>
+          <div class="legend-item"><span class="legend-swatch person-swatch"></span> Personne saine</div>
+          <div class="legend-item"><span class="legend-swatch infected-swatch"></span> Personne infectée</div>
+          <div class="legend-item"><span class="legend-swatch dead-swatch"></span> Personne décédée</div>
+          <div class="legend-item"><span class="legend-swatch immune-swatch"></span> Personne immunisée</div>
+        </div>
+
+        <div class="sidebar-footer">
+          <span>Graine</span>
+          <strong id="map-seed">--</strong>
+        </div>
+      </aside>
+
+      <section class="map-panel">
+        <div class="map-toolbar">
+          <div>
+            <p class="section-kicker">Cartographie</p>
+            <span class="coordinates" id="coordinates">Position : --</span>
+          </div>
+          <div class="toolbar-actions">
+            <button type="button" class="tool-button" id="fit-button" title="Ajuster la carte">Ajuster</button>
+            <button type="button" class="tool-button icon-button" id="zoom-out" title="Zoom arrière" aria-label="Zoom arrière">−</button>
+            <span class="zoom-value" id="zoom-value">100%</span>
+            <button type="button" class="tool-button icon-button" id="zoom-in" title="Zoom avant" aria-label="Zoom avant">+</button>
+          </div>
+        </div>
+        <div class="canvas-wrap" id="canvas-wrap">
+          <canvas id="map-canvas" aria-label="Carte interactive de la population"></canvas>
+          <div class="loading-card" id="loading-card">
+            <span class="loader" aria-hidden="true"></span>
+            <span id="loading-message">Lecture de generated_map.json…</span>
+          </div>
+        </div>
+        <div class="map-caption">
+          <span>Déplacez la carte avec le bouton gauche de la souris</span>
+          <span id="map-resolution">--</span>
+        </div>
+      </section>
+    </section>
+  </main>
   <script src="/app.js"></script>
 </body>
 </html>

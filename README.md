@@ -6,6 +6,7 @@ Projet de cours d'optimisation backend en Go autour d'une simulation de contamin
 
 - Go 1.22 ou plus recent
 - Un navigateur web
+- Hyperfine (pour les benchmarks)
 
 ## Lancer le projet
 
@@ -17,16 +18,79 @@ go run .
 
 Puis ouvrir <http://localhost:8080>.
 
+Dans l'interface, `Commencer` enchaîne automatiquement les tours, `Pause` suspend la partie et `Réinitialiser` revient au tour zéro. Le curseur est réglé par défaut sur `1 tour/s` ; sa position minimale `Sans limite` enchaîne un tour dès que la réponse du précédent est reçue.
+
+Pour régénérer la carte avec la seed déterministe par défaut :
+
+```bash
+go run ./cmd/generate-map
+```
+
+Pour choisir une autre seed :
+
+```bash
+go run ./cmd/generate-map -seed 123
+```
+
+## Backend de simulation
+
+Le serveur maintient un plateau et applique les règles à chaque transition :
+
+- `GET /api/state` retourne le plateau courant.
+- `POST /api/tick` calcule puis retourne l'état suivant.
+- `POST /api/reset` remet la simulation à son état initial avec la seed du serveur.
+- `GET /api/simulation` retourne le plateau, les règles et le numéro du tick.
+- `GET /api/rules` retourne les règles courantes.
+- `PUT /api/rules` remplace les règles avec un JSON `closeRadius`, `closeChance`, `farRadius` et `farChance`.
+
+Le serveur utilise la seed `42` par défaut. Les paramètres utiles sont configurables :
+
+```bash
+go run . -seed 42 -width 40 -height 25 -density 0.25 -addr :8080
+```
+
+Exemple de changement de règles :
+
+```bash
+curl -X PUT http://localhost:8080/api/rules `
+	-H "Content-Type: application/json" `
+	-d '{"closeRadius":2,"closeChance":0.5,"farRadius":15,"farChance":0.15}'
+```
+
 ## Tester
 
 ```bash
 go test ./...
 ```
 
+## Benchmark Hyperfine
+
+Le benchmark `BenchmarkBoardStep` mesure une transition complète du moteur Go avec des rayons de test un peu plus larges (`4` proche et `20` lointain). Pour comparer les performances après une optimisation :
+
+```bash
+hyperfine --warmup 2 --runs 10 "go test ./game -run '^$' -bench '^BenchmarkBoardStep$' -benchtime=1s"
+```
+
+Ou, sous PowerShell :
+
+```powershell
+.\benchmark.ps1
+```
+
+Le script crée `benchmarks/latest.json` pour l'application et `benchmarks/latest.md` pour une lecture humaine sous forme de tableau. Le panneau « Dernier benchmark » de l'interface affiche automatiquement le contenu du rapport JSON au prochain chargement.
+
+Sur Windows, Hyperfine peut être installé avec :
+
+```powershell
+winget install sharkdp.hyperfine
+```
+
 ## Structure
 
 - `main.go` : serveur HTTP et endpoints API.
-- `game/` : moteur de simulation et tests unitaires.
+- `benchmark.ps1` : exécution Hyperfine et génération des rapports de mesure.
+- `benchmarks/` : rapport JSON consommé par l'application et rapport Markdown lisible.
+- `game/` : moteur de simulation, règles, tests unitaires et benchmarks.
 - `frontend/` : canvas plein écran et simulation locale en JavaScript.
 
 ## API

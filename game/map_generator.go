@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	GeneratedMapWidth               = 2000
-	GeneratedMapHeight              = 2000
+	GeneratedMapWidth               = 400
+	GeneratedMapHeight              = 400
 	GeneratedMapSeed          int64 = 42
 	GeneratedMapFamilySpacing       = 18
 	GeneratedMapFamilyRadius        = 3
@@ -27,6 +27,8 @@ type Person struct {
 	Y        int   `json:"y"`
 	Age      uint8 `json:"age"`
 	Infected bool  `json:"infected"`
+	Dead     bool  `json:"dead"`
+	Immune   bool  `json:"immune"`
 }
 
 type Settlement struct {
@@ -42,6 +44,65 @@ type PopulationMap struct {
 	Seed        int64        `json:"seed"`
 	Settlements []Settlement `json:"settlements"`
 	People      []Person     `json:"people"`
+}
+
+func (populationMap *PopulationMap) Step(config ContaminationConfig, source *rand.Rand) {
+	infected := make([]int, 0)
+	for index, person := range populationMap.People {
+		if !person.Infected || person.Dead {
+			continue
+		}
+		if source.Float64() < config.DeathChance {
+			populationMap.People[index].Infected = false
+			populationMap.People[index].Dead = true
+			continue
+		}
+		if source.Float64() < config.RecoveryChance {
+			populationMap.People[index].Infected = false
+			populationMap.People[index].Immune = source.Float64() < config.ImmunityChance
+			continue
+		}
+		infected = append(infected, index)
+	}
+
+	for index, person := range populationMap.People {
+		if person.Infected || person.Dead || person.Immune {
+			continue
+		}
+		if populationMap.shouldInfect(index, infected, config, source) {
+			populationMap.People[index].Infected = true
+		}
+	}
+}
+
+func (populationMap *PopulationMap) shouldInfect(index int, infected []int, config ContaminationConfig, source *rand.Rand) bool {
+	closeCandidates := 0
+	farCandidates := 0
+	target := populationMap.People[index]
+	closeRadiusSquared := config.CloseRadius * config.CloseRadius
+	farRadiusSquared := config.FarRadius * config.FarRadius
+	for _, infectedIndex := range infected {
+		infectedPerson := populationMap.People[infectedIndex]
+		distance := squaredDistance(target.X, target.Y, infectedPerson.X, infectedPerson.Y)
+		if distance <= closeRadiusSquared {
+			closeCandidates++
+		} else if distance <= farRadiusSquared {
+			farCandidates++
+		}
+	}
+	chance := config.FarChance
+	if closeCandidates > 0 {
+		chance = config.CloseChance
+		closeCandidates += 1
+	} else {
+		closeCandidates = farCandidates
+	}
+	for range closeCandidates {
+		if source.Float64() < chance {
+			return true
+		}
+	}
+	return false
 }
 
 func GeneratePopulationMap(width, height int, seed int64) *PopulationMap {

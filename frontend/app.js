@@ -1,348 +1,380 @@
-const canvas = document.querySelector("#board");
-const context = canvas.getContext("2d");
-const startButton = document.querySelector("#start");
-const pauseButton = document.querySelector("#pause");
-const resetButton = document.querySelector("#reset");
-const loadMapButton = document.querySelector("#load-map");
-const generationElement = document.querySelector("#generation");
-const healthyCountElement = document.querySelector("#healthy-count");
-const infectedCountElement = document.querySelector("#infected-count");
-const placementModeElement = document.querySelector("#placement-mode");
-const closeRadiusInput = document.querySelector("#close-radius");
-const closeChanceInput = document.querySelector("#close-chance");
-const farRadiusInput = document.querySelector("#far-radius");
-const farChanceInput = document.querySelector("#far-chance");
-const populationInput = document.querySelector("#population");
-const initialInfectedInput = document.querySelector("#initial-infected");
+(() => {
+  const canvas = document.querySelector('#map-canvas');
+  const canvasWrap = document.querySelector('#canvas-wrap');
+  const loadingCard = document.querySelector('#loading-card');
+  const loadingMessage = document.querySelector('#loading-message');
+  const status = document.querySelector('#status');
+  const statusLabel = document.querySelector('#status-label');
+  const zoomValue = document.querySelector('#zoom-value');
+  const coordinates = document.querySelector('#coordinates');
+  const context = canvas.getContext('2d');
 
-let worldSize = 400;
-const initialViewSize = 100;
-const minCellSize = 0.035;
-const maxCellSize = 80;
-const maxPopulation = worldSize * worldSize;
-let cellSize = Math.max(4, Math.min(maxCellSize, window.innerWidth / initialViewSize));
-let cameraX = worldSize / 2;
-let cameraY = worldSize / 2;
-let generation = 0;
-let running = false;
-let animationFrame;
-let dragStart;
-const healthyCells = new Set();
-const infectedCells = new Set();
+  const view = { scale: 1, offsetX: 0, offsetY: 0, dragging: false, pointerX: 0, pointerY: 0 };
+  let map = null;
+  let simulationTick = 0;
+  let simulationRunning = false;
+  let tickInFlight = false;
+  let runToken = 0;
+  let pendingSimulationStats = null;
+  let simulationRenderScheduled = false;
+  let devicePixelRatio = window.devicePixelRatio || 1;
 
-function clamp(value, minimum, maximum) {
-  return Math.max(minimum, Math.min(maximum, value));
-}
+  const colors = { background: '#e6efeb', grid: '#cbded8', healthy: '#65b8aa', infected: '#e76552', city: '#dfa83c', igloo: '#76a3ae' };
 
-function randomInt(maximum) {
-  return Math.floor(Math.random() * maximum);
-}
+  function setText(selector, value) { document.querySelector(selector).textContent = value; }
 
-function populationLimit() {
-  return clamp(Number(populationInput.value) || 0, 1, maxPopulation);
-}
-
-function infectedLimit(targetPopulation) {
-  return clamp(Number(initialInfectedInput.value) || 0, 1, targetPopulation);
-}
-
-function contaminationRules() {
-  return {
-    closeRadius: Math.max(0, Number(closeRadiusInput.value) || 0),
-    closeChance: clamp((Number(closeChanceInput.value) || 0) / 100, 0, 1),
-    farRadius: Math.max(0, Number(farRadiusInput.value) || 0),
-    farChance: clamp((Number(farChanceInput.value) || 0) / 100, 0, 1),
-  };
-}
-
-function formatCount(count) {
-  return new Intl.NumberFormat("fr-FR").format(count);
-}
-
-function updateStats() {
-  generationElement.textContent = `Génération : ${generation}`;
-  healthyCountElement.textContent = `Sains : ${formatCount(healthyCells.size)}`;
-  infectedCountElement.textContent = `Contaminés : ${formatCount(infectedCells.size)}`;
-}
-
-function resizeCanvas() {
-  const pixelRatio = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(canvas.clientWidth * pixelRatio);
-  canvas.height = Math.floor(canvas.clientHeight * pixelRatio);
-  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  render();
-}
-
-function worldToScreen(column, row) {
-  return {
-    x: (column - cameraX) * cellSize + canvas.clientWidth / 2,
-    y: (row - cameraY) * cellSize + canvas.clientHeight / 2,
-  };
-}
-
-function screenToWorld(x, y) {
-  return {
-    column: Math.floor((x - canvas.clientWidth / 2) / cellSize + cameraX),
-    row: Math.floor((y - canvas.clientHeight / 2) / cellSize + cameraY),
-  };
-}
-
-function cellKey(column, row) {
-  return `${column},${row}`;
-}
-
-function parseCellKey(key) {
-  const [column, row] = key.split(",").map(Number);
-  return { column, row };
-}
-
-function isInsideWorld(column, row) {
-  return column >= 0 && column < worldSize && row >= 0 && row < worldSize;
-}
-
-function renderGrid() {
-  const maxLines = 250;
-  const visibleColumns = canvas.clientWidth / cellSize;
-  const visibleRows = canvas.clientHeight / cellSize;
-  const interval = Math.max(1, Math.ceil(Math.max(visibleColumns, visibleRows) / maxLines));
-  const left = Math.max(0, Math.floor(cameraX - visibleColumns / 2));
-  const right = Math.min(worldSize, Math.ceil(cameraX + visibleColumns / 2));
-  const top = Math.max(0, Math.floor(cameraY - visibleRows / 2));
-  const bottom = Math.min(worldSize, Math.ceil(cameraY + visibleRows / 2));
-
-  context.beginPath();
-  context.strokeStyle = "rgba(255, 255, 255, 0.08)";
-  context.lineWidth = 1;
-  for (let column = left - (left % interval); column <= right; column += interval) {
-    const x = worldToScreen(column, 0).x + 0.5;
-    context.moveTo(x, 0);
-    context.lineTo(x, canvas.clientHeight);
-  }
-  for (let row = top - (top % interval); row <= bottom; row += interval) {
-    const y = worldToScreen(0, row).y + 0.5;
-    context.moveTo(0, y);
-    context.lineTo(canvas.clientWidth, y);
-  }
-  context.stroke();
-}
-
-function renderCells(cells, color) {
-  context.fillStyle = color;
-  for (const key of cells) {
-    const { column, row } = parseCellKey(key);
-    const position = worldToScreen(column, row);
-    if (position.x + cellSize < 0 || position.y + cellSize < 0 || position.x > canvas.clientWidth || position.y > canvas.clientHeight) continue;
-    context.fillRect(position.x, position.y, Math.max(1, cellSize), Math.max(1, cellSize));
-  }
-}
-
-function render() {
-  context.fillStyle = "#030303";
-  context.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-  renderGrid();
-  renderCells(healthyCells, "#f2f2f2");
-  renderCells(infectedCells, "#ff5d5d");
-}
-
-function clearPopulation() {
-  healthyCells.clear();
-  infectedCells.clear();
-}
-
-function placeCell(column, row, mode) {
-  if (!isInsideWorld(column, row)) return;
-  const key = cellKey(column, row);
-  if (mode === "infected") {
-    if (infectedCells.has(key)) {
-      infectedCells.delete(key);
-      return;
-    }
-    healthyCells.delete(key);
-    infectedCells.add(key);
-    return;
-  }
-  if (healthyCells.has(key)) {
-    healthyCells.delete(key);
-    return;
-  }
-  infectedCells.delete(key);
-  healthyCells.add(key);
-}
-
-function populateWorld() {
-  clearPopulation();
-  generation = 0;
-  const targetPopulation = populationLimit();
-  const targetInfected = infectedLimit(targetPopulation);
-
-  while (healthyCells.size + infectedCells.size < targetPopulation) {
-    const column = randomInt(worldSize);
-    const row = randomInt(worldSize);
-    const key = cellKey(column, row);
-    if (healthyCells.has(key) || infectedCells.has(key)) continue;
-    healthyCells.add(key);
+  function resizeCanvas() {
+    const bounds = canvasWrap.getBoundingClientRect();
+    devicePixelRatio = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.floor(bounds.width * devicePixelRatio));
+    canvas.height = Math.max(1, Math.floor(bounds.height * devicePixelRatio));
+    context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    draw();
   }
 
-  const healthyKeys = Array.from(healthyCells);
-  for (let index = 0; index < targetInfected && healthyKeys.length > 0; index += 1) {
-    const infectedIndex = randomInt(healthyKeys.length);
-    const infectedKey = healthyKeys.splice(infectedIndex, 1)[0];
-    healthyCells.delete(infectedKey);
-    infectedCells.add(infectedKey);
+  function fitMap() {
+    if (!map) return;
+    const bounds = canvasWrap.getBoundingClientRect();
+    const padding = 42;
+    view.scale = Math.min((bounds.width - padding * 2) / map.width, (bounds.height - padding * 2) / map.height);
+    view.offsetX = (bounds.width - map.width * view.scale) / 2;
+    view.offsetY = (bounds.height - map.height * view.scale) / 2;
+    draw();
   }
 
-  updateStats();
-  render();
-}
-
-function shouldInfect(distanceSquared, rules) {
-  if (distanceSquared <= rules.closeRadius * rules.closeRadius) {
-    return Math.random() < rules.closeChance;
-  }
-  if (distanceSquared <= rules.farRadius * rules.farRadius) {
-    return Math.random() < rules.farChance;
-  }
-  return false;
-}
-
-function nextGeneration() {
-  const rules = contaminationRules();
-  const closeCandidates = new Set();
-  const farCandidates = new Set();
-  const farRadius = Math.max(rules.closeRadius, rules.farRadius);
-  const farRadiusSquared = farRadius * farRadius;
-  const closeRadiusSquared = rules.closeRadius * rules.closeRadius;
-
-  for (const key of infectedCells) {
-    const { column, row } = parseCellKey(key);
-    for (let rowOffset = -farRadius; rowOffset <= farRadius; rowOffset += 1) {
-      const targetRow = row + rowOffset;
-      if (targetRow < 0 || targetRow >= worldSize) continue;
-      for (let columnOffset = -farRadius; columnOffset <= farRadius; columnOffset += 1) {
-        const targetColumn = column + columnOffset;
-        if (targetColumn < 0 || targetColumn >= worldSize) continue;
-        const distanceSquared = columnOffset * columnOffset + rowOffset * rowOffset;
-        if (distanceSquared === 0 || distanceSquared > farRadiusSquared) continue;
-        const targetKey = cellKey(targetColumn, targetRow);
-        if (!healthyCells.has(targetKey)) continue;
-        if (distanceSquared <= closeRadiusSquared) {
-          closeCandidates.add(targetKey);
-        } else {
-          farCandidates.add(targetKey);
-        }
-      }
-    }
+  function drawGrid(width, height) {
+    const step = 100 * view.scale;
+    if (step < 8) return;
+    context.strokeStyle = colors.grid;
+    context.lineWidth = 1;
+    context.beginPath();
+    const startX = view.offsetX % step;
+    const startY = view.offsetY % step;
+    for (let x = startX; x < width; x += step) { context.moveTo(x, 0); context.lineTo(x, height); }
+    for (let y = startY; y < height; y += step) { context.moveTo(0, y); context.lineTo(width, y); }
+    context.stroke();
   }
 
-  for (const key of closeCandidates) {
-    if (!healthyCells.has(key)) continue;
-    if (Math.random() < rules.closeChance) {
-      healthyCells.delete(key);
-      infectedCells.add(key);
-    }
-  }
-
-  for (const key of farCandidates) {
-    if (!healthyCells.has(key) || infectedCells.has(key)) continue;
-    if (Math.random() < rules.farChance) {
-      healthyCells.delete(key);
-      infectedCells.add(key);
-    }
-  }
-
-  generation += 1;
-  updateStats();
-  render();
-}
-
-function animate() {
-  if (!running) return;
-  nextGeneration();
-  animationFrame = requestAnimationFrame(animate);
-}
-
-canvas.addEventListener("pointerdown", (event) => {
-  canvas.setPointerCapture(event.pointerId);
-  dragStart = { x: event.clientX, y: event.clientY, cameraX, cameraY };
-});
-
-canvas.addEventListener("pointerup", (event) => {
-  if (!dragStart) return;
-  const moved = Math.hypot(event.clientX - dragStart.x, event.clientY - dragStart.y);
-  if (!running && moved < 5) {
-    const rectangle = canvas.getBoundingClientRect();
-    const position = screenToWorld(event.clientX - rectangle.left, event.clientY - rectangle.top);
-    placeCell(position.column, position.row, placementModeElement.value);
-    updateStats();
-    render();
-  }
-  dragStart = null;
-});
-
-canvas.addEventListener("pointermove", (event) => {
-  if (!dragStart) return;
-  cameraX = clamp(dragStart.cameraX - (event.clientX - dragStart.x) / cellSize, 0, worldSize - 1);
-  cameraY = clamp(dragStart.cameraY - (event.clientY - dragStart.y) / cellSize, 0, worldSize - 1);
-  render();
-});
-
-canvas.addEventListener("wheel", (event) => {
-  event.preventDefault();
-  const rectangle = canvas.getBoundingClientRect();
-  const before = screenToWorld(event.clientX - rectangle.left, event.clientY - rectangle.top);
-  cellSize = clamp(cellSize * (event.deltaY < 0 ? 1.2 : 1 / 1.2), minCellSize, maxCellSize);
-  const after = screenToWorld(event.clientX - rectangle.left, event.clientY - rectangle.top);
-  cameraX = clamp(cameraX + before.column - after.column, 0, worldSize - 1);
-  cameraY = clamp(cameraY + before.row - after.row, 0, worldSize - 1);
-  render();
-}, { passive: false });
-
-startButton.addEventListener("click", () => {
-  if (running || infectedCells.size === 0) return;
-  running = true;
-  animationFrame = requestAnimationFrame(animate);
-});
-
-pauseButton.addEventListener("click", () => {
-  running = false;
-  cancelAnimationFrame(animationFrame);
-});
-
-resetButton.addEventListener("click", () => {
-  running = false;
-  cancelAnimationFrame(animationFrame);
-  populateWorld();
-});
-
-loadMapButton.addEventListener("click", async () => {
-  running = false;
-  cancelAnimationFrame(animationFrame);
-  loadMapButton.disabled = true;
-
-  try {
-    const response = await fetch("/api/map");
-    if (!response.ok) throw new Error("Impossible de charger la carte");
-    const map = await response.json();
-    worldSize = map.width;
-    clearPopulation();
-    generation = 0;
+  function drawPeople() {
+    const radius = Math.max(1.25, Math.min(3.2, view.scale * 1.75));
     for (const person of map.people) {
-      if (!Number.isInteger(person.x) || !Number.isInteger(person.y)) continue;
-      const key = cellKey(person.x, person.y);
-      if (person.infected) infectedCells.add(key);
-      else healthyCells.add(key);
+      context.beginPath();
+      context.fillStyle = person.dead ? '#172126' : person.immune ? '#d5a83e' : person.infected ? colors.infected : colors.healthy;
+      context.arc(view.offsetX + person.x * view.scale, view.offsetY + person.y * view.scale, person.infected ? radius + 1.4 : radius, 0, Math.PI * 2);
+      context.fill();
     }
-    cameraX = worldSize / 2;
-    cameraY = map.height / 2;
-    updateStats();
-    render();
-  } catch (error) {
-    console.error(error);
-  } finally {
-    loadMapButton.disabled = false;
   }
-});
 
-window.addEventListener("resize", resizeCanvas);
-resizeCanvas();
-loadMapButton.click();
+  function draw() {
+    if (!map) return;
+    const bounds = canvasWrap.getBoundingClientRect();
+    context.clearRect(0, 0, bounds.width, bounds.height);
+    context.fillStyle = colors.background;
+    context.fillRect(0, 0, bounds.width, bounds.height);
+    drawGrid(bounds.width, bounds.height);
+    context.save();
+    context.beginPath();
+    context.rect(view.offsetX, view.offsetY, map.width * view.scale, map.height * view.scale);
+    context.clip();
+    drawPeople();
+    context.restore();
+    context.strokeStyle = '#a6c6be';
+    context.lineWidth = 1;
+    context.strokeRect(view.offsetX, view.offsetY, map.width * view.scale, map.height * view.scale);
+    zoomValue.textContent = `${Math.round(view.scale * 100)}%`;
+  }
+
+  function updateStats() {
+    const infected = map.people.filter((person) => person.infected).length;
+    setText('#map-size', `${map.width} × ${map.height}`);
+    setText('#people-count', map.people.length.toLocaleString('fr-FR'));
+    setText('#infected-count', infected.toLocaleString('fr-FR'));
+    setText('#map-seed', map.seed);
+    setText('#map-resolution', `${map.people.length.toLocaleString('fr-FR')} personnes · ${map.settlements.length} implantations`);
+  }
+
+  function updateSimulationStats(simulation) {
+    simulationTick = simulation.tick;
+    const people = simulation.map?.people || map?.people;
+    if (people) {
+      pendingSimulationStats = {
+        tick: simulationTick,
+        infected: people.filter((person) => person.infected && !person.dead).length,
+        dead: people.filter((person) => person.dead).length,
+        immune: people.filter((person) => person.immune && !person.dead).length,
+      };
+    } else {
+      pendingSimulationStats = {
+        tick: simulationTick,
+        infected: simulation.board.cells.filter((cell) => cell === 2).length,
+        dead: simulation.board.cells.filter((cell) => cell === 3).length,
+        immune: simulation.board.cells.filter((cell) => cell === 4).length,
+      };
+    }
+    if (simulationRenderScheduled) return;
+    simulationRenderScheduled = true;
+    window.requestAnimationFrame(() => {
+      simulationRenderScheduled = false;
+      if (!pendingSimulationStats) return;
+      setText('#simulation-tick', pendingSimulationStats.tick);
+      setText('#simulation-infected', pendingSimulationStats.infected);
+      setText('#simulation-dead', pendingSimulationStats.dead);
+      setText('#simulation-immune', pendingSimulationStats.immune);
+    });
+  }
+
+  function updateSpeedLabel() {
+    const speed = Number(document.querySelector('#speed-slider').value);
+    setText('#speed-label', speed === 0 ? 'Sans limite' : `${speed} tour${speed > 1 ? 's' : ''}/s`);
+  }
+
+  function hasInfectedPeople() {
+    return Boolean(map && map.people.some((person) => person.infected && !person.dead));
+  }
+
+  function formatMilliseconds(seconds) {
+    return `${(seconds * 1000).toFixed(3)} ms`;
+  }
+
+  function updateBenchmark(report) {
+    const result = report.results && report.results[0];
+    if (!result) return;
+    setText('#benchmark-mean', formatMilliseconds(result.meanSeconds));
+    const rows = [
+      ['Médiane', formatMilliseconds(result.medianSeconds)],
+      ['Minimum', formatMilliseconds(result.minSeconds)],
+      ['Maximum', formatMilliseconds(result.maxSeconds)],
+      ['Écart-type', formatMilliseconds(result.stddevSeconds)],
+    ];
+    document.querySelector('#benchmark-table').innerHTML = rows.map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`).join('');
+    setText('#benchmark-meta', `${report.configuration.runs} runs · ${report.configuration.warmup} warmup`);
+    document.querySelector('#benchmark-empty').classList.add('hidden');
+    document.querySelector('#benchmark-content').classList.remove('hidden');
+  }
+
+  async function loadSimulation() {
+    const response = await fetch('/api/simulation');
+    if (!response.ok) throw new Error(`simulation HTTP ${response.status}`);
+    const simulation = await response.json();
+    if (simulation.map) {
+      map = simulation.map;
+      updateStats();
+      draw();
+    }
+    updateSimulationStats(simulation);
+    updateRuleInputs(simulation);
+  }
+
+  async function loadBenchmarks() {
+    const response = await fetch('/api/benchmarks');
+    if (!response.ok) return;
+    updateBenchmark(await response.json());
+  }
+
+  async function advanceSimulation() {
+    if (tickInFlight) return;
+    tickInFlight = true;
+    try {
+      const response = await fetch('/api/tick', { method: 'POST' });
+      if (!response.ok) throw new Error(`tick HTTP ${response.status}`);
+      const board = await response.json();
+      if (board.people) {
+        map = board;
+        updateStats();
+        draw();
+        await loadSimulation();
+      } else {
+        updateSimulationStats({ tick: simulationTick + 1, board });
+      }
+    } finally {
+      tickInFlight = false;
+    }
+  }
+
+  async function resetSimulation() {
+    pauseSimulation();
+    const response = await fetch('/api/reset', { method: 'POST' });
+    if (!response.ok) throw new Error(`reset HTTP ${response.status}`);
+    const board = await response.json();
+    if (board.people) {
+      map = board;
+      updateStats();
+      draw();
+      await loadSimulation();
+    } else {
+      updateSimulationStats({ tick: 0, board });
+    }
+  }
+
+  function updateRuleInputs(simulation) {
+    const values = {
+      '#seed-input': simulation.seed,
+      '#close-radius-input': simulation.rules.closeRadius,
+      '#far-radius-input': simulation.rules.farRadius,
+      '#close-chance-input': simulation.rules.closeChance,
+      '#far-chance-input': simulation.rules.farChance,
+      '#death-chance-input': simulation.rules.deathChance,
+      '#recovery-chance-input': simulation.rules.recoveryChance,
+      '#immunity-chance-input': simulation.rules.immunityChance,
+    };
+    for (const [selector, value] of Object.entries(values)) setTextValue(selector, value);
+  }
+
+  function setTextValue(selector, value) {
+    document.querySelector(selector).value = value;
+  }
+
+  function readSetting(selector) {
+    return Number(document.querySelector(selector).value);
+  }
+
+  async function applySettings() {
+    pauseSimulation();
+    const feedback = document.querySelector('#settings-feedback');
+    const button = document.querySelector('#apply-settings');
+    button.disabled = true;
+    feedback.textContent = 'Application…';
+    try {
+      const rules = {
+        closeRadius: readSetting('#close-radius-input'),
+        closeChance: readSetting('#close-chance-input'),
+        farRadius: readSetting('#far-radius-input'),
+        farChance: readSetting('#far-chance-input'),
+        deathChance: readSetting('#death-chance-input'),
+        recoveryChance: readSetting('#recovery-chance-input'),
+        immunityChance: readSetting('#immunity-chance-input'),
+      };
+      const rulesResponse = await fetch('/api/rules', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rules),
+      });
+      if (!rulesResponse.ok) throw new Error(await rulesResponse.text());
+      const resetResponse = await fetch('/api/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seed: readSetting('#seed-input') }),
+      });
+      if (!resetResponse.ok) throw new Error(await resetResponse.text());
+      map = await resetResponse.json();
+      updateStats();
+      draw();
+      await loadSimulation();
+      feedback.textContent = 'Nouvelle partie prête';
+    } catch (error) {
+      feedback.textContent = `Erreur : ${error.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function wait(milliseconds) {
+    return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+  }
+
+  async function runSimulation(token) {
+    let nextTickAt = performance.now();
+    while (simulationRunning && token === runToken) {
+      try {
+        await advanceSimulation();
+      } catch (error) {
+        console.error(error);
+        pauseSimulation();
+        return;
+      }
+      if (!hasInfectedPeople()) {
+        pauseSimulation();
+        status.dataset.state = 'ready';
+        statusLabel.textContent = 'Propagation terminée';
+        return;
+      }
+      const speed = Number(document.querySelector('#speed-slider').value);
+      if (speed === 0) continue;
+      nextTickAt += 1000 / speed;
+      const remainingDelay = nextTickAt - performance.now();
+      if (remainingDelay > 0) await wait(remainingDelay);
+      if (remainingDelay <= 0) nextTickAt = performance.now();
+    }
+  }
+
+  function startSimulation() {
+    if (simulationRunning) return;
+    simulationRunning = true;
+    runToken += 1;
+    document.querySelector('#start-button').disabled = true;
+    document.querySelector('#pause-button').disabled = false;
+    runSimulation(runToken);
+  }
+
+  function pauseSimulation() {
+    simulationRunning = false;
+    runToken += 1;
+    document.querySelector('#start-button').disabled = false;
+    document.querySelector('#pause-button').disabled = true;
+  }
+
+  function mapPoint(event) {
+    const bounds = canvas.getBoundingClientRect();
+    return { x: (event.clientX - bounds.left - view.offsetX) / view.scale, y: (event.clientY - bounds.top - view.offsetY) / view.scale };
+  }
+
+  function zoomAt(factor, clientX, clientY) {
+    if (!map) return;
+    const bounds = canvas.getBoundingClientRect();
+    const x = clientX - bounds.left;
+    const y = clientY - bounds.top;
+    const mapX = (x - view.offsetX) / view.scale;
+    const mapY = (y - view.offsetY) / view.scale;
+    view.scale = Math.max(0.03, Math.min(8, view.scale * factor));
+    view.offsetX = x - mapX * view.scale;
+    view.offsetY = y - mapY * view.scale;
+    draw();
+  }
+
+  canvas.addEventListener('pointerdown', (event) => { view.dragging = true; view.pointerX = event.clientX; view.pointerY = event.clientY; canvas.setPointerCapture(event.pointerId); });
+  canvas.addEventListener('pointermove', (event) => {
+    const point = mapPoint(event);
+    coordinates.textContent = `Position : ${Math.round(point.x)}, ${Math.round(point.y)}`;
+    if (!view.dragging) return;
+    view.offsetX += event.clientX - view.pointerX;
+    view.offsetY += event.clientY - view.pointerY;
+    view.pointerX = event.clientX; view.pointerY = event.clientY;
+    draw();
+  });
+  canvas.addEventListener('pointerup', () => { view.dragging = false; });
+  canvas.addEventListener('pointercancel', () => { view.dragging = false; });
+  canvas.addEventListener('wheel', (event) => { event.preventDefault(); zoomAt(event.deltaY < 0 ? 1.12 : 0.89, event.clientX, event.clientY); }, { passive: false });
+  document.querySelector('#fit-button').addEventListener('click', fitMap);
+  document.querySelector('#zoom-in').addEventListener('click', () => { const bounds = canvas.getBoundingClientRect(); zoomAt(1.25, bounds.left + bounds.width / 2, bounds.top + bounds.height / 2); });
+  document.querySelector('#zoom-out').addEventListener('click', () => { const bounds = canvas.getBoundingClientRect(); zoomAt(0.8, bounds.left + bounds.width / 2, bounds.top + bounds.height / 2); });
+  document.querySelector('#start-button').addEventListener('click', startSimulation);
+  document.querySelector('#pause-button').addEventListener('click', pauseSimulation);
+  document.querySelector('#reset-button').addEventListener('click', () => resetSimulation().catch(console.error));
+  document.querySelector('#apply-settings').addEventListener('click', () => applySettings().catch(console.error));
+  document.querySelector('#speed-slider').addEventListener('input', updateSpeedLabel);
+  window.addEventListener('resize', resizeCanvas);
+
+  async function loadMap() {
+    try {
+      const response = await fetch('/api/map');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      map = await response.json();
+      updateStats();
+      status.dataset.state = 'ready';
+      statusLabel.textContent = 'Carte synchronisée';
+      loadingCard.classList.add('hidden');
+      resizeCanvas();
+      fitMap();
+      await Promise.all([loadSimulation(), loadBenchmarks()]);
+    } catch (error) {
+      console.error(error);
+      status.dataset.state = 'error';
+      statusLabel.textContent = 'Lecture impossible';
+      loadingMessage.textContent = 'La carte est indisponible. Vérifiez que le serveur Go est lancé.';
+      loadingCard.querySelector('.loader').style.display = 'none';
+    }
+  }
+
+  loadMap();
+  updateSpeedLabel();
+})();

@@ -2,13 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"jeu-de-la-vie/game"
 )
@@ -19,57 +20,87 @@ const (
 )
 
 type server struct {
-	mu    sync.RWMutex
-	board *game.Board
-	rng   *rand.Rand
-	rules game.ContaminationConfig
+	mu         sync.RWMutex
+	simulation *game.Simulation
+	population *game.PopulationMap
+	mapRNG     *rand.Rand
+	mapSeed    int64
 }
 
 func main() {
-	state := &server{
-		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
-		rules: game.ContaminationConfig{
-			CloseRadius: 2,
-			CloseChance: 0.5,
-			FarRadius:   15,
-			FarChance:   0.15,
-		},
+	address := flag.String("addr", ":8080", "adresse d'écoute HTTP")
+	seed := flag.Int64("seed", game.GeneratedMapSeed, "seed de la simulation")
+	width := flag.Int("width", boardWidth, "largeur du plateau")
+	height := flag.Int("height", boardHeight, "hauteur du plateau")
+	density := flag.Float64("density", 0.25, "densité initiale de personnes saines")
+	flag.Parse()
+	if *width <= 0 || *height <= 0 {
+		log.Fatal("width et height doivent être strictement positifs")
 	}
-	state.board = game.RandomBoard(boardWidth, boardHeight, 0.25, state.rng)
+	if *density < 0 || *density > 1 {
+		log.Fatal("density doit être comprise entre 0 et 1")
+	}
+
+	rules := game.ContaminationConfig{
+		CloseRadius:    2,
+		CloseChance:    0.5,
+		FarRadius:      15,
+		FarChance:      0.15,
+		DeathChance:    0.02,
+		RecoveryChance: 0.05,
+		ImmunityChance: 0.8,
+	}
+	state := &server{
+		simulation: game.NewSimulation(*width, *height, *density, *seed, rules),
+		population: game.GeneratePopulationMap(game.GeneratedMapWidth, game.GeneratedMapHeight, *seed),
+		mapRNG:     rand.New(rand.NewSource(*seed)),
+		mapSeed:    *seed,
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/state", state.handleState)
-	mux.HandleFunc("/api/map", handleMap)
+	mux.HandleFunc("/api/simulation", state.handleSimulation)
+	mux.HandleFunc("/api/rules", state.handleRules)
+	mux.HandleFunc("/api/map", state.handleMap)
+	mux.HandleFunc("/api/benchmarks", handleBenchmarks)
 	mux.HandleFunc("/api/tick", state.handleTick)
 	mux.HandleFunc("/api/reset", state.handleReset)
 	mux.Handle("/", http.FileServer(http.Dir(filepath.Join(".", "frontend"))))
 
-	log.Println("Jeu de contamination disponible sur http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	log.Printf("Jeu de contamination disponible sur http://localhost%s (seed %d)", *address, *seed)
+	log.Fatal(http.ListenAndServe(*address, mux))
 }
 
-func handleMap(response http.ResponseWriter, request *http.Request) {
+func handleBenchmarks(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	file, err := os.Open("generated_map.json")
+	file, err := os.Open(filepath.Join("benchmarks", "latest.json"))
 	if err != nil {
-		http.Error(response, "carte introuvable", http.StatusNotFound)
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write([]byte(`{"results":[],"configuration":{"runs":0,"warmup":0}}`))
 		return
 	}
 	defer file.Close()
 
-	populationMap, err := game.ReadPopulationMap(file)
-	if err != nil {
-		http.Error(response, "carte JSON invalide", http.StatusInternalServerError)
+	response.Header().Set("Content-Type", "application/json")
+	if _, err := io.Copy(response, file); err != nil {
+		log.Printf("erreur de lecture des benchmarks: %v", err)
+	}
+}
+
+func (server *server) handleMap(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	response.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(response).Encode(populationMap); err != nil {
-		log.Printf("erreur d'encodage de la carte: %v", err)
-	}
+
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	server.writeJSON(response, server.population)
 }
 
 func (server *server) handleState(response http.ResponseWriter, request *http.Request) {
@@ -86,9 +117,10 @@ func (server *server) handleTick(response http.ResponseWriter, request *http.Req
 		return
 	}
 	server.mu.Lock()
-	server.board.Step(server.rules, server.rng)
+	server.simulation.Step()
+	server.population.Step(server.simulation.Rules, server.mapRNG)
 	server.mu.Unlock()
-	server.writeBoard(response)
+	server.writeMap(response)
 }
 
 func (server *server) handleReset(response http.ResponseWriter, request *http.Request) {
@@ -96,17 +128,83 @@ func (server *server) handleReset(response http.ResponseWriter, request *http.Re
 		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	var resetRequest struct {
+		Seed *int64 `json:"seed"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&resetRequest); err != nil && err != io.EOF {
+		http.Error(response, "JSON invalide", http.StatusBadRequest)
+		return
+	}
 	server.mu.Lock()
-	server.board = game.RandomBoard(boardWidth, boardHeight, 0.25, server.rng)
+	if resetRequest.Seed == nil {
+		server.simulation.Reset()
+	} else {
+		server.simulation.ResetWithSeed(*resetRequest.Seed)
+		server.mapSeed = *resetRequest.Seed
+	}
+	server.mapRNG = rand.New(rand.NewSource(server.mapSeed))
+	server.population = game.GeneratePopulationMap(game.GeneratedMapWidth, game.GeneratedMapHeight, server.mapSeed)
 	server.mu.Unlock()
-	server.writeBoard(response)
+	server.writeMap(response)
+}
+
+func (server *server) handleSimulation(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	server.writeJSON(response, struct {
+		Board *game.Board              `json:"board"`
+		Rules game.ContaminationConfig `json:"rules"`
+		Tick  uint64                   `json:"tick"`
+		Seed  int64                    `json:"seed"`
+		Map   *game.PopulationMap      `json:"map"`
+	}{server.simulation.Board, server.simulation.Rules, server.simulation.Tick, server.simulation.Seed(), server.population})
+}
+
+func (server *server) handleRules(response http.ResponseWriter, request *http.Request) {
+	switch request.Method {
+	case http.MethodGet:
+		server.mu.RLock()
+		rules := server.simulation.Rules
+		server.mu.RUnlock()
+		server.writeJSON(response, rules)
+	case http.MethodPut:
+		var rules game.ContaminationConfig
+		if err := json.NewDecoder(request.Body).Decode(&rules); err != nil {
+			http.Error(response, "JSON invalide", http.StatusBadRequest)
+			return
+		}
+		if err := rules.Validate(); err != nil {
+			http.Error(response, err.Error(), http.StatusBadRequest)
+			return
+		}
+		server.mu.Lock()
+		server.simulation.Rules = rules
+		server.mu.Unlock()
+		server.writeJSON(response, rules)
+	default:
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (server *server) writeBoard(response http.ResponseWriter) {
 	server.mu.RLock()
 	defer server.mu.RUnlock()
+	server.writeJSON(response, server.simulation.Board)
+}
+
+func (server *server) writeMap(response http.ResponseWriter) {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	server.writeJSON(response, server.population)
+}
+
+func (server *server) writeJSON(response http.ResponseWriter, value any) {
 	response.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(response).Encode(server.board); err != nil {
+	if err := json.NewEncoder(response).Encode(value); err != nil {
 		log.Printf("erreur d'encodage de l'état: %v", err)
 	}
 }

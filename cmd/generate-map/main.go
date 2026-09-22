@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
 
@@ -10,10 +11,13 @@ import (
 const outputFile = "generated_map.json"
 
 func main() {
+	seed := flag.Int64("seed", game.GeneratedMapSeed, "graine utilisée pour générer la carte")
+	flag.Parse()
+
 	populationMap := game.GeneratePopulationMap(
 		game.GeneratedMapWidth,
 		game.GeneratedMapHeight,
-		game.GeneratedMapSeed,
+		*seed,
 	)
 
 	file, err := os.Create(outputFile)
@@ -26,5 +30,5 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Printf("carte generee dans %s (%d personnes)", outputFile, len(populationMap.People))
+	log.Printf("carte generee dans %s avec la seed %d (%d personnes)", outputFile, *seed, len(populationMap.People))
 }

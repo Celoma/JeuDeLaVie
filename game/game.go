@@ -1,6 +1,9 @@
 package game
 
-import "math/rand"
+import (
+	"encoding/json"
+	"math/rand"
+)
 
 type CellState uint8
 
@@ -8,19 +11,36 @@ const (
 	CellEmpty CellState = iota
 	CellHealthy
 	CellInfected
+	CellDead
+	CellImmune
 )
 
 type ContaminationConfig struct {
-	CloseRadius int     `json:"closeRadius"`
-	CloseChance float64 `json:"closeChance"`
-	FarRadius   int     `json:"farRadius"`
-	FarChance   float64 `json:"farChance"`
+	CloseRadius    int     `json:"closeRadius"`
+	CloseChance    float64 `json:"closeChance"`
+	FarRadius      int     `json:"farRadius"`
+	FarChance      float64 `json:"farChance"`
+	DeathChance    float64 `json:"deathChance"`
+	RecoveryChance float64 `json:"recoveryChance"`
+	ImmunityChance float64 `json:"immunityChance"`
 }
 
 type Board struct {
 	Width  int         `json:"width"`
 	Height int         `json:"height"`
 	Cells  []CellState `json:"cells"`
+}
+
+func (board Board) MarshalJSON() ([]byte, error) {
+	cells := make([]int, len(board.Cells))
+	for index, cell := range board.Cells {
+		cells[index] = int(cell)
+	}
+	return json.Marshal(struct {
+		Width  int   `json:"width"`
+		Height int   `json:"height"`
+		Cells  []int `json:"cells"`
+	}{board.Width, board.Height, cells})
 }
 
 func NewBoard(width, height int) *Board {
@@ -52,9 +72,26 @@ func (board *Board) Step(config ContaminationConfig, source *rand.Rand) {
 	next := make([]CellState, len(board.Cells))
 	copy(next, board.Cells)
 
-	infectedPositions := make([]int, 0)
 	for index, cell := range board.Cells {
-		if cell == CellInfected {
+		if cell != CellInfected {
+			continue
+		}
+		if source.Float64() < config.DeathChance {
+			next[index] = CellDead
+			continue
+		}
+		if source.Float64() < config.RecoveryChance {
+			if source.Float64() < config.ImmunityChance {
+				next[index] = CellImmune
+			} else {
+				next[index] = CellHealthy
+			}
+		}
+	}
+
+	infectedPositions := make([]int, 0)
+	for index := range board.Cells {
+		if next[index] == CellInfected {
 			infectedPositions = append(infectedPositions, index)
 		}
 	}
@@ -75,7 +112,8 @@ func (board *Board) Step(config ContaminationConfig, source *rand.Rand) {
 func (board *Board) shouldInfect(column, row int, infectedPositions []int, config ContaminationConfig, source *rand.Rand) bool {
 	closeRadiusSquared := config.CloseRadius * config.CloseRadius
 	farRadiusSquared := config.FarRadius * config.FarRadius
-	farCandidate := false
+	closeCandidates := 0
+	farCandidates := 0
 
 	for _, infectedIndex := range infectedPositions {
 		infectedColumn, infectedRow := board.coordinates(infectedIndex)
@@ -84,15 +122,26 @@ func (board *Board) shouldInfect(column, row int, infectedPositions []int, confi
 			continue
 		}
 		if distance <= closeRadiusSquared {
-			return source.Float64() < config.CloseChance
+			closeCandidates++
+			continue
 		}
 		if distance <= farRadiusSquared {
-			farCandidate = true
+			farCandidates++
 		}
 	}
 
-	if farCandidate {
-		return source.Float64() < config.FarChance
+	for range closeCandidates {
+		if source.Float64() < config.CloseChance {
+			return true
+		}
+	}
+	if closeCandidates > 0 {
+		return false
+	}
+	for range farCandidates {
+		if source.Float64() < config.FarChance {
+			return true
+		}
 	}
 	return false
 }
