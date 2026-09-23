@@ -5,8 +5,8 @@ generate_benchmark_report.py
 
 Génère automatiquement un rapport PDF complet (CPU, mémoire, hyperfine,
 diagnostic) à partir des fichiers produits par benchmark.ps1 dans un dossier
-de benchmarks : cpu-*.prof, memory-*.prof, hyperfine-*.json, latest.json,
-latest.md.
+de benchmarks : cpu-*.prof, memory-*.prof, gc-*.log, hyperfine-*.json,
+latest.json, latest.md.
 
 Conçu pour être appelé automatiquement à la fin de benchmark.ps1 :
 
@@ -54,6 +54,8 @@ try:
     from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Image,
                                      Table, TableStyle, PageBreak, HRFlowable)
     from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
 except ImportError:
     sys.exit("[generate_benchmark_report] reportlab manquant. "
               "Installez-le avec : pip install reportlab")
@@ -87,6 +89,14 @@ def extract_notes_from_md(path):
         return []
     with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
         text = f.read()
+    if "Ã" in text or "Â" in text:
+        try:
+            text = text.encode("cp1252").decode("utf-8")
+        except UnicodeError:
+            try:
+                text = text.encode("latin-1").decode("utf-8")
+            except UnicodeError:
+                pass
     m = re.search(r"##\s*Notes\s*\n(.*?)(\n##|\Z)", text, re.DOTALL)
     if not m:
         return []
@@ -116,15 +126,22 @@ def run_pprof_top(profile_path, extra_flag=None, nodecount=25):
 
 def run_pprof_png(profile_path, out_png, extra_flag=None, nodecount=15):
     """Génère un graphe d'appel PNG via graphviz. Retourne True si réussi."""
-    if not profile_path or not shutil.which("go") or not shutil.which("dot"):
+    dot_path = shutil.which("dot")
+    if not dot_path and os.name == "nt":
+        candidate = os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Graphviz", "bin", "dot.exe")
+        if os.path.isfile(candidate):
+            dot_path = candidate
+    if not profile_path or not shutil.which("go") or not dot_path:
         return False
     cmd = ["go", "tool", "pprof", "-png", f"-nodecount={nodecount}"]
     if extra_flag:
         cmd.append(extra_flag)
     cmd.append(profile_path)
     try:
+        env = os.environ.copy()
+        env["PATH"] = os.path.dirname(dot_path) + os.pathsep + env.get("PATH", "")
         with open(out_png, "wb") as f:
-            result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=60)
+            result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=60, env=env)
         return result.returncode == 0 and os.path.getsize(out_png) > 0
     except Exception:
         return False
@@ -178,6 +195,44 @@ def parse_pprof_top(text):
         # Repli : estimer le total à partir du plus grand cum%/flat% si absent
         total_value = max((r["cum_val"] * 100.0 / r["cum_pct"] for r in rows if r["cum_pct"] > 0), default=0.0)
     return {"type": ptype, "total_value": total_value or 0.0, "total_unit": total_unit, "rows": rows}
+
+
+_GC_RE = re.compile(
+    r"gc\s+(\d+)\s+@[^:]+:\s+([^ ]+)\+([^ ]+)\+([^ ]+)\s+ms clock,\s+([^ ]+)\+([^ ]+)\+([^ ]+)\s+ms cpu,\s+[^,]+,\s+([\d.]+)\s+MB goal"
+)
+
+
+def parse_gc_trace(path):
+    """Parse les lignes gctrace produites par le runtime Go."""
+    if not path or not os.path.exists(path):
+        return None
+    cycles = []
+    with open(path, "rb") as stream:
+        raw = stream.read()
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in raw[:200]:
+        text = raw.decode("utf-16", errors="replace")
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    text = re.sub(r"\s+", " ", text)
+    for match in _GC_RE.finditer(text):
+        values = []
+        for value in match.groups()[1:]:
+            values.append(sum(float(part) for part in re.split(r"[+/]", value) if part))
+        cycles.append({
+            "number": int(match.group(1)),
+            "pauseMs": sum(values[0:3]),
+            "cpuMs": sum(values[3:6]),
+            "goalMb": values[6],
+        })
+    if not cycles:
+        return {"cycles": 0, "totalPauseMs": 0, "maxPauseMs": 0, "totalCpuMs": 0, "maxGoalMb": 0}
+    return {
+        "cycles": len(cycles),
+        "totalPauseMs": sum(item["pauseMs"] for item in cycles),
+        "maxPauseMs": max(item["pauseMs"] for item in cycles),
+        "totalCpuMs": sum(item["cpuMs"] for item in cycles),
+        "maxGoalMb": max(item["goalMb"] for item in cycles),
+    }
 
 
 # ========================================================================
@@ -252,7 +307,22 @@ def fmt_pct(part, total):
     return f"{(part / total * 100):.1f}%" if total else "—"
 
 
+def register_pdf_fonts():
+    candidates = [
+        (r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\arialbd.ttf", r"C:\Windows\Fonts\ariali.ttf"),
+        (r"C:\Windows\Fonts\segoeui.ttf", r"C:\Windows\Fonts\segoeuib.ttf", r"C:\Windows\Fonts\segoeuii.ttf"),
+    ]
+    for regular, bold, italic in candidates:
+        if all(os.path.isfile(path) for path in (regular, bold, italic)):
+            pdfmetrics.registerFont(TTFont("BenchmarkRegular", regular))
+            pdfmetrics.registerFont(TTFont("BenchmarkBold", bold))
+            pdfmetrics.registerFont(TTFont("BenchmarkItalic", italic))
+            return {"regular": "BenchmarkRegular", "bold": "BenchmarkBold", "italic": "BenchmarkItalic"}
+    return {"regular": "Helvetica", "bold": "Helvetica-Bold", "italic": "Helvetica-Oblique"}
+
+
 def build_pdf(out_pdf, ctx):
+    fonts = register_pdf_fonts()
     styles = getSampleStyleSheet()
     DARK = colors.HexColor("#2B2B2B")
     GREY = colors.HexColor("#666666")
@@ -263,14 +333,14 @@ def build_pdf(out_pdf, ctx):
         if name not in styles:
             styles.add(ParagraphStyle(name=name, **kw))
 
-    add_style("TitleBig", fontSize=22, leading=26, textColor=DARK, spaceAfter=4, fontName="Helvetica-Bold")
+    add_style("TitleBig", fontSize=22, leading=26, textColor=DARK, spaceAfter=4, fontName=fonts["bold"])
     add_style("Subtitle", fontSize=11.5, leading=15, textColor=GREY, spaceAfter=14)
-    add_style("H1", fontSize=15, leading=18, textColor=DARK, spaceBefore=16, spaceAfter=8, fontName="Helvetica-Bold")
-    add_style("H2", fontSize=12, leading=15, textColor=RED, spaceBefore=10, spaceAfter=6, fontName="Helvetica-Bold")
+    add_style("H1", fontSize=15, leading=18, textColor=DARK, spaceBefore=16, spaceAfter=8, fontName=fonts["bold"])
+    add_style("H2", fontSize=12, leading=15, textColor=RED, spaceBefore=10, spaceAfter=6, fontName=fonts["bold"])
     add_style("Body", fontSize=10, leading=14.5, textColor=DARK, spaceAfter=6, alignment=TA_LEFT)
     add_style("BodySmall", fontSize=8.7, leading=12, textColor=GREY, spaceAfter=4)
     add_style("Caption", fontSize=8.5, leading=11, textColor=GREY, alignment=TA_CENTER,
-              spaceBefore=4, spaceAfter=10, fontName="Helvetica-Oblique")
+              spaceBefore=4, spaceAfter=10, fontName=fonts["italic"])
     add_style("MyBullet", fontSize=10, leading=14.5, textColor=DARK, leftIndent=12, spaceAfter=4)
 
     doc = SimpleDocTemplate(out_pdf, pagesize=A4,
@@ -298,14 +368,14 @@ def build_pdf(out_pdf, ctx):
         ]
         if header:
             style += [
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTNAME", (0, 0), (-1, 0), fonts["bold"]),
                 ("BACKGROUND", (0, 0), (-1, 0), DARK),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHTBG]),
             ]
         else:
             style += [("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, LIGHTBG]),
-                       ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold")]
+                       ("FONTNAME", (0, 0), (0, -1), fonts["bold"])]
         t.setStyle(TableStyle(style))
         return t
 
@@ -357,6 +427,35 @@ def build_pdf(out_pdf, ctx):
             v = hres.get(k)
             hf_rows.append([label, f"{v:.4f} s" if isinstance(v, (int, float)) else "n/a"])
         story.append(styled_table(hf_rows, [60 * mm, 102 * mm]))
+
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("Résumé CPU et mémoire", styles["H2"]))
+    resource_rows = [["Mesure", "Valeur"]]
+    cpu_profile = ctx.get("cpu_parsed")
+    memory_profile = ctx.get("mem_parsed")
+    if cpu_profile:
+        resource_rows.append(["CPU échantillonné (pprof)", f"{cpu_profile['total_value']:.2f}{cpu_profile['total_unit']}"])
+    if memory_profile:
+        resource_rows.append(["Mémoire allouée (pprof)", f"{memory_profile['total_value']:.2f}{memory_profile['total_unit']}"])
+    for result in ctx.get("bench_results", []):
+        resource_rows.append(["Mémoire par opération", f"{result.get('bytesPerOp', '—')} B/op"])
+    if len(resource_rows) > 1:
+        story.append(styled_table(resource_rows, [75 * mm, 87 * mm]))
+    else:
+        story.append(Paragraph("Aucune mesure CPU/mémoire disponible.", styles["Body"]))
+
+    if ctx.get("gc_trace"):
+        gc = ctx["gc_trace"]
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Garbage collector Go", styles["H2"]))
+        gc_rows = [
+            ["Cycles GC", str(gc["cycles"])],
+            ["Temps GC cumulé", f"{gc['totalPauseMs']:.3f} ms"],
+            ["Plus longue pause", f"{gc['maxPauseMs']:.3f} ms"],
+            ["Temps CPU GC cumulé", f"{gc['totalCpuMs']:.3f} ms"],
+            ["Objectif mémoire maximal", f"{gc['maxGoalMb']:.2f} MB"],
+        ]
+        story.append(styled_table(gc_rows, [75 * mm, 87 * mm], header=False))
 
     # ---------------- 2. CPU ----------------
     if ctx.get("cpu_parsed") and ctx["cpu_parsed"]["rows"]:
@@ -454,8 +553,9 @@ def build_pdf(out_pdf, ctx):
            "successifs pour comparer les hotspots et le temps moyen dans le temps.")
     bullet("<b>Un seul point de taille de données.</b> Si applicable, mesurer plusieurs tailles "
            "permettrait de vérifier empiriquement la complexité algorithmique observée en section 2.")
-    bullet("<b>Pas de trace GC détaillée</b> (<code>GODEBUG=gctrace=1</code>) — utile si les "
-           "allocations mémoire (section 3) sont significatives.")
+    if not ctx.get("gc_trace") or ctx["gc_trace"]["cycles"] == 0:
+        bullet("<b>Trace GC indisponible</b> (<code>GODEBUG=gctrace=1</code>) — relancer le "
+               "benchmark avec la collecte GC activée.")
 
     if ctx.get("md_notes"):
         story.append(Paragraph("Notes de l'outil de benchmark", styles["H2"]))
@@ -466,7 +566,7 @@ def build_pdf(out_pdf, ctx):
     story.append(Paragraph(
         f"Rapport généré automatiquement le {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} par "
         f"generate_benchmark_report.py, à partir des fichiers les plus récents du dossier "
-        f"de benchmarks. Analyse réalisée avec <font face='Courier'>go tool pprof</font>.",
+        f"de benchmarks. Analyse réalisée avec <font face='{fonts['regular']}'>go tool pprof</font>.",
         styles["BodySmall"]))
 
     doc.build(story)
@@ -489,6 +589,7 @@ def main():
 
     cpu_prof = find_latest(directory, "cpu-*.prof")
     mem_prof = find_latest(directory, "memory-*.prof")
+    gc_log = find_latest(directory, "gc-*.log")
     hyperfine_path = find_latest(directory, "hyperfine-*.json")
     latest_json_path = os.path.join(directory, "latest.json")
     latest_md_path = os.path.join(directory, "latest.md")
@@ -509,6 +610,7 @@ def main():
         "hyperfine": hyperfine,
         "cpu_prof": cpu_prof,
         "mem_prof": mem_prof,
+        "gc_trace": parse_gc_trace(gc_log),
         "md_notes": md_notes,
         "subtitle": f"{bench_results[0]['name']} — analyse CPU, mémoire et hyperfine" if bench_results else "Analyse CPU, mémoire et hyperfine",
     }

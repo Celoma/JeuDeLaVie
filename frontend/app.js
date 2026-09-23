@@ -400,11 +400,41 @@
 
   function startSimulation() {
     if (simulationRunning) return;
+    startBackendBenchmark();
     simulationRunning = true;
     runToken += 1;
     document.querySelector('#start-button').disabled = true;
     document.querySelector('#pause-button').disabled = false;
     runSimulation(runToken);
+  }
+
+  async function startBackendBenchmark() {
+    try {
+      const response = await fetch('/api/benchmark', { method: 'POST' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const benchmark = await response.json();
+      setText('#benchmark-backend-meta', benchmark.running ? 'Benchmark backend en cours…' : 'Benchmark backend déjà en cours');
+      pollBackendBenchmark();
+    } catch (error) {
+      setText('#benchmark-backend-meta', `Benchmark backend indisponible : ${error.message}`);
+    }
+  }
+
+  async function pollBackendBenchmark() {
+    try {
+      const response = await fetch('/api/benchmark');
+      if (!response.ok) return;
+      const benchmark = await response.json();
+      if (benchmark.running) {
+        setText('#benchmark-backend-meta', 'Benchmark backend en cours…');
+        window.setTimeout(pollBackendBenchmark, 500);
+      } else if (benchmark.completed) {
+        setText('#benchmark-backend-meta', benchmark.success ? 'Benchmark backend terminé' : 'Échec du benchmark backend');
+        if (benchmark.success) await loadBenchmarks();
+      }
+    } catch (error) {
+      console.error(error);
+    }
   }
 
   function pauseSimulation() {

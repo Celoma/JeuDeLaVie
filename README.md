@@ -8,11 +8,18 @@ Projet de cours d'optimisation backend en Go autour d'une simulation de contamin
 - Un navigateur web
 - Hyperfine (pour les benchmarks)
 - Python 3 avec `reportlab`, `matplotlib` et `pillow` pour le rapport PDF des benchmarks
+- Graphviz (optionnel, pour les graphes d'appel CPU et mémoire)
 
 Installation des dependances Python :
 
 ```powershell
 python -m pip install reportlab matplotlib pillow
+```
+
+Graphviz peut être installé sous Windows avec :
+
+```powershell
+winget install --id Graphviz.Graphviz --exact
 ```
 
 ## Lancer le projet
@@ -86,7 +93,7 @@ Ou, sous PowerShell :
 
 Le script crée `benchmarks/latest.json` pour l'application, `benchmarks/latest.md` pour le dernier résultat et une archive Markdown horodatée `benchmarks/benchmark-YYYYMMDD-HHmmssfff.md` à chaque exécution. Il produit aussi deux profils `pprof` horodatés (`cpu-*.prof` et `memory-*.prof`) et, si Hyperfine est installé, un export `hyperfine-*.json`. Le panneau « Dernier benchmark » de l'interface affiche automatiquement le contenu du rapport JSON au prochain chargement, puis ajoute des latences API mesurées en direct pour `/api/simulation`, `/api/tick` et `/api/reset`.
 
-À la fin de chaque exécution, `generate_benchmark.py` génère également `benchmarks/pdf/benchmark-report-*.pdf` à partir des profils et des résultats les plus récents. Les fichiers bruts (`.md`, `.json` et `.prof`) restent ignorés par Git ; seuls les rapports PDF peuvent être versionnés.
+À la fin de chaque exécution, `generate_benchmark.py` génère également `benchmarks/pdf/benchmark-report-*.pdf` à partir des profils et des résultats les plus récents. Le PDF contient les mesures CPU `pprof`, les allocations mémoire `pprof`, la mémoire par opération (`B/op`), la trace détaillée du GC (`gc-*.log`) et les graphes d'appel si Graphviz est disponible. Les fichiers bruts (`.md`, `.json`, `.prof` et `.log`) restent ignorés par Git ; seuls les rapports PDF peuvent être versionnés.
 
 Pour analyser un profil :
 

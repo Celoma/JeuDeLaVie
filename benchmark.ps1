@@ -150,11 +150,22 @@ $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssfff')
 $archiveMdPath = Join-Path $benchmarksDir "benchmark-$timestamp.md"
 $profilePath = Join-Path $benchmarksDir "cpu-$timestamp.prof"
 $memoryProfilePath = Join-Path $benchmarksDir "memory-$timestamp.prof"
+$gcLogPath = Join-Path $benchmarksDir "gc-$timestamp.log"
 $hyperfinePath = Join-Path $benchmarksDir "hyperfine-$timestamp.json"
 
-$profileOutput = & go test ./game -run '^$' -bench "$benchmarkPattern" -benchmem -count 1 -cpuprofile $profilePath -memprofile $memoryProfilePath 2>&1
-if ($LASTEXITCODE -ne 0) {
-    throw "CPU profile failed: $($profileOutput -join [Environment]::NewLine)"
+try {
+    $previousGodebug = $env:GODEBUG
+    $env:GODEBUG = 'gctrace=1'
+    $profileOutput = & go test ./game -run '^$' -bench "$benchmarkPattern" -benchmem -count 1 -cpuprofile $profilePath -memprofile $memoryProfilePath 2>&1 | Tee-Object -FilePath $gcLogPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "CPU profile failed: $($profileOutput -join [Environment]::NewLine)"
+    }
+} finally {
+    if ($null -eq $previousGodebug) {
+        Remove-Item Env:GODEBUG -ErrorAction SilentlyContinue
+    } else {
+        $env:GODEBUG = $previousGodebug
+    }
 }
 
 $hyperfine = Get-Command hyperfine -ErrorAction SilentlyContinue
@@ -178,7 +189,7 @@ $markdown = @"
 
 Généré le : $($report.generatedAt) (UTC)
 
-Profils : ``$([System.IO.Path]::GetFileName($profilePath))`` (CPU), ``$([System.IO.Path]::GetFileName($memoryProfilePath))`` (mémoire)
+Profils : ``$([System.IO.Path]::GetFileName($profilePath))`` (CPU), ``$([System.IO.Path]::GetFileName($memoryProfilePath))`` (mémoire), ``$([System.IO.Path]::GetFileName($gcLogPath))`` (GC)
 
 | Paramètre | Valeur |
 | --- | ---: |
@@ -188,6 +199,7 @@ Profils : ``$([System.IO.Path]::GetFileName($profilePath))`` (CPU), ``$([System.
 | Profil | Résultat |
 | CPU | ``$([System.IO.Path]::GetFileName($profilePath))`` |
 | Mémoire | ``$([System.IO.Path]::GetFileName($memoryProfilePath))`` |
+| GC détaillé | ``$([System.IO.Path]::GetFileName($gcLogPath))`` |
 
 ## Résultat du tick sur la carte 600 × 600
 
@@ -200,7 +212,8 @@ $(($resultReports | ForEach-Object { "| $($_.name) | $([math]::Round($_.meanSeco
 - Mesure du calcul du tick sur une carte 600 × 600.
 - La carte et le générateur aléatoire utilisent toujours la seed 42.
 - La latence API est mesurée à part dans le frontend, sans rendu canvas.
-- Les métriques CPU bas niveau, GC détaillé, I/O, réseau et base de données ne sont pas instrumentées dans ce benchmark.
+- La trace GC détaillée est enregistrée dans le fichier ``gc-*.log`` et résumée dans le PDF.
+- Les métriques I/O, réseau et base de données ne sont pas instrumentées dans ce benchmark.
 "@
 
 $markdown | Set-Content -Path $mdPath -Encoding utf8
@@ -208,6 +221,7 @@ $markdown | Set-Content -Path $archiveMdPath -Encoding utf8
 
 Write-Host "Benchmarks écrits dans $jsonPath, $mdPath et $archiveMdPath"
 Write-Host "Profils écrits dans $profilePath et $memoryProfilePath"
+Write-Host "Trace GC écrite dans $gcLogPath"
 if ($report.configuration.hyperfineAvailable) { Write-Host "Rapport Hyperfine écrit dans $hyperfinePath" }
 
 $python = Get-Command python -ErrorAction SilentlyContinue

@@ -8,8 +8,10 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"jeu-de-la-vie/game"
 )
@@ -20,11 +22,22 @@ const (
 )
 
 type server struct {
-	mu         sync.RWMutex
-	simulation *game.Simulation
-	population *game.PopulationMap
-	mapRNG     *rand.Rand
-	mapSeed    int64
+	mu          sync.RWMutex
+	simulation  *game.Simulation
+	population  *game.PopulationMap
+	mapRNG      *rand.Rand
+	mapSeed     int64
+	benchmarkMu sync.Mutex
+	benchmark   benchmarkState
+}
+
+type benchmarkState struct {
+	Running    bool   `json:"running"`
+	Completed  bool   `json:"completed"`
+	Success    bool   `json:"success"`
+	Output     string `json:"output,omitempty"`
+	StartedAt  string `json:"startedAt,omitempty"`
+	FinishedAt string `json:"finishedAt,omitempty"`
 }
 
 func main() {
@@ -63,12 +76,48 @@ func main() {
 	mux.HandleFunc("/api/rules", state.handleRules)
 	mux.HandleFunc("/api/map", state.handleMap)
 	mux.HandleFunc("/api/benchmarks", handleBenchmarks)
+	mux.HandleFunc("/api/benchmark", state.handleBenchmark)
 	mux.HandleFunc("/api/tick", state.handleTick)
 	mux.HandleFunc("/api/reset", state.handleReset)
 	mux.Handle("/", http.FileServer(http.Dir(filepath.Join(".", "frontend"))))
 
 	log.Printf("Jeu de contamination disponible sur http://localhost%s (seed %d)", *address, *seed)
 	log.Fatal(http.ListenAndServe(*address, mux))
+}
+
+func (server *server) handleBenchmark(response http.ResponseWriter, request *http.Request) {
+	server.benchmarkMu.Lock()
+	defer server.benchmarkMu.Unlock()
+
+	if request.Method == http.MethodGet {
+		server.writeJSON(response, server.benchmark)
+		return
+	}
+	if request.Method != http.MethodPost {
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if server.benchmark.Running {
+		server.writeJSON(response, server.benchmark)
+		return
+	}
+
+	server.benchmark = benchmarkState{Running: true, StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	state := server.benchmark
+	server.writeJSON(response, state)
+	go server.runBenchmark()
+}
+
+func (server *server) runBenchmark() {
+	command := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "benchmark.ps1", "-Runs", "1", "-Warmup", "0")
+	output, err := command.CombinedOutput()
+	server.benchmarkMu.Lock()
+	server.benchmark.Running = false
+	server.benchmark.Completed = true
+	server.benchmark.Success = err == nil
+	server.benchmark.Output = string(output)
+	server.benchmark.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	server.benchmarkMu.Unlock()
 }
 
 func handleBenchmarks(response http.ResponseWriter, request *http.Request) {
