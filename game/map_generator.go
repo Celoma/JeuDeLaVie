@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	GeneratedMapWidth               = 1500
-	GeneratedMapHeight              = 1500
+	GeneratedMapWidth               = 850
+	GeneratedMapHeight              = 850
 	GeneratedMapSeed          int64 = 42
 	GeneratedMapFamilySpacing       = 18
 	GeneratedMapFamilyRadius        = 3
