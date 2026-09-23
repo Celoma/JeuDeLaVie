@@ -7,6 +7,13 @@ Projet de cours d'optimisation backend en Go autour d'une simulation de contamin
 - Go 1.22 ou plus recent
 - Un navigateur web
 - Hyperfine (pour les benchmarks)
+- Python 3 avec `reportlab`, `matplotlib` et `pillow` pour le rapport PDF des benchmarks
+
+Installation des dependances Python :
+
+```powershell
+python -m pip install reportlab matplotlib pillow
+```
 
 ## Lancer le projet
 
@@ -65,7 +72,7 @@ go test ./...
 
 ## Benchmark performance
 
-Le microbenchmark `BenchmarkTick` mesure uniquement une transition complète du moteur Go (`Board.Step`), avec des rayons de test un peu plus larges (`4` proche et `20` lointain), sans HTTP ni rendu. Le script lance plusieurs exécutions indépendantes pour calculer les statistiques affichées dans le front et produit aussi un profil CPU Go `cpu-YYYYMMDD-HHmmssfff.prof`.
+Le microbenchmark `BenchmarkTick` mesure uniquement une transition complète du moteur Go (`Board.Step`) sur une carte `600 × 600`, avec la seed `42`, des rayons `4` proche et `20` lointain, sans HTTP ni rendu. Le script utilise par défaut `3` runs et `1` warmup ; augmente-les avec `-Runs` et `-Warmup` pour une mesure plus précise.
 
 ```bash
 go test ./game -run '^$' -bench '^BenchmarkTick$' -benchmem -count 1
@@ -77,7 +84,16 @@ Ou, sous PowerShell :
 .\benchmark.ps1
 ```
 
-Le script crée `benchmarks/latest.json` pour l'application, `benchmarks/latest.md` pour le dernier résultat et une archive Markdown horodatée `benchmarks/benchmark-YYYYMMDD-HHmmssfff.md` à chaque exécution. Le panneau « Dernier benchmark » de l'interface affiche automatiquement le contenu du rapport JSON au prochain chargement, puis ajoute des latences API mesurées en direct pour `/api/simulation`, `/api/tick` et `/api/reset`.
+Le script crée `benchmarks/latest.json` pour l'application, `benchmarks/latest.md` pour le dernier résultat et une archive Markdown horodatée `benchmarks/benchmark-YYYYMMDD-HHmmssfff.md` à chaque exécution. Il produit aussi deux profils `pprof` horodatés (`cpu-*.prof` et `memory-*.prof`) et, si Hyperfine est installé, un export `hyperfine-*.json`. Le panneau « Dernier benchmark » de l'interface affiche automatiquement le contenu du rapport JSON au prochain chargement, puis ajoute des latences API mesurées en direct pour `/api/simulation`, `/api/tick` et `/api/reset`.
+
+À la fin de chaque exécution, `generate_benchmark.py` génère également `benchmarks/pdf/benchmark-report-*.pdf` à partir des profils et des résultats les plus récents. Les fichiers bruts (`.md`, `.json` et `.prof`) restent ignorés par Git ; seuls les rapports PDF peuvent être versionnés.
+
+Pour analyser un profil :
+
+```powershell
+go tool pprof .\benchmarks\cpu-YYYYMMDD-HHmmssfff.prof
+go tool pprof .\benchmarks\memory-YYYYMMDD-HHmmssfff.prof
+```
 
 Pour analyser le profil CPU :
 

@@ -6,9 +6,14 @@ import (
 )
 
 func BenchmarkTick(b *testing.B) {
+	const (
+		benchmarkWidth  = 600
+		benchmarkHeight = 600
+		benchmarkSeed   = 42
+	)
 	rules := ContaminationConfig{CloseRadius: 4, CloseChance: 0.5, FarRadius: 20, FarChance: 0.15}
-	board := RandomBoard(200, 200, 0.25, rand.New(rand.NewSource(42)))
-	source := rand.New(rand.NewSource(42))
+	board := RandomBoard(benchmarkWidth, benchmarkHeight, 0.25, rand.New(rand.NewSource(benchmarkSeed)))
+	source := rand.New(rand.NewSource(benchmarkSeed))
 
 	b.ResetTimer()
 	for iteration := 0; iteration < b.N; iteration++ {

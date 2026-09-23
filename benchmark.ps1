@@ -1,6 +1,6 @@
 param(
-    [int]$Runs = 10,
-    [int]$Warmup = 2
+    [int]$Runs = 3,
+    [int]$Warmup = 1
 )
 
 function Get-Percentile {
@@ -55,39 +55,43 @@ function Get-Stats {
 }
 
 $benchmarkName = 'BenchmarkTick'
-$benchmarkCommand = "go test ./game -run '^$' -bench '^$benchmarkName`$' -benchmem -count 1"
+$benchmarkPattern = '^BenchmarkTick$'
+$benchmarkCommand = "go test ./game -run '^$' -bench '$benchmarkPattern' -benchmem -count 1"
+$hyperfineCommand = 'go test ./game -run=^$ -bench=^BenchmarkTick$ -benchmem -benchtime=1s'
 $benchmarks = @()
 $goos = $null
 $goarch = $null
 $cpu = $null
+$benchmarkResults = @{}
 
 for ($warmupIndex = 1; $warmupIndex -le $Warmup; $warmupIndex++) {
-    & go test ./game -run '^$' -bench "^$benchmarkName`$" -benchmem -count 1 | Out-Null
+    & go test ./game -run '^$' -bench "$benchmarkPattern" -benchmem -count 1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Warmup benchmark failed"
     }
 }
 
 for ($runIndex = 1; $runIndex -le $Runs; $runIndex++) {
-    $output = & go test ./game -run '^$' -bench "^$benchmarkName`$" -benchmem -count 1 2>&1
+    $output = & go test ./game -run '^$' -bench "$benchmarkPattern" -benchmem -count 1 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Benchmark run $runIndex failed"
     }
 
-    $benchmarkLine = $output | Select-String "^$benchmarkName"
-    if (-not $benchmarkLine) {
-        throw "BenchmarkBoardStep line missing from run $runIndex"
+    $benchmarkLines = @($output | Select-String '^BenchmarkTick(?:-|\s)')
+    if ($benchmarkLines.Count -eq 0) {
+        throw "Tick benchmark lines missing from run $runIndex"
     }
 
-    $parts = ($benchmarkLine.Line -split '\s+' | Where-Object { $_ -ne '' })
-    if ($parts.Count -lt 8) {
-        throw "Unexpected benchmark line format: $($benchmarkLine.Line)"
-    }
-
-    $benchmarks += [pscustomobject]@{
-        NsPerOp = [double]$parts[2]
-        BytesPerOp = [double]$parts[4]
-        AllocsPerOp = [double]$parts[6]
+    foreach ($benchmarkLine in $benchmarkLines) {
+        $parts = ($benchmarkLine.Line -split '\s+' | Where-Object { $_ -ne '' })
+        if ($parts.Count -lt 8) { throw "Unexpected benchmark line format: $($benchmarkLine.Line)" }
+        $name = $parts[0]
+        if (-not $benchmarkResults.ContainsKey($name)) { $benchmarkResults[$name] = @() }
+        $benchmarkResults[$name] += [pscustomobject]@{
+            NsPerOp = [double]$parts[2]
+            BytesPerOp = [double]$parts[4]
+            AllocsPerOp = [double]$parts[6]
+        }
     }
 
     if (-not $goos) {
@@ -100,47 +104,41 @@ for ($runIndex = 1; $runIndex -le $Runs; $runIndex++) {
     }
 }
 
-$nsValues = [double[]]($benchmarks | ForEach-Object { $_.NsPerOp })
-$bytesValues = [double[]]($benchmarks | ForEach-Object { $_.BytesPerOp })
-$allocValues = [double[]]($benchmarks | ForEach-Object { $_.AllocsPerOp })
-
-$nsStats = Get-Stats -Values $nsValues
-$bytesStats = Get-Stats -Values $bytesValues
-$allocStats = Get-Stats -Values $allocValues
-$throughput = 1000000000 / $nsStats.Mean
+$resultReports = @()
+foreach ($benchmarkEntry in $benchmarkResults.GetEnumerator()) {
+    $samples = $benchmarkEntry.Value
+    $nsStats = Get-Stats -Values ([double[]]($samples | ForEach-Object { $_.NsPerOp }))
+    $bytesStats = Get-Stats -Values ([double[]]($samples | ForEach-Object { $_.BytesPerOp }))
+    $allocStats = Get-Stats -Values ([double[]]($samples | ForEach-Object { $_.AllocsPerOp }))
+    $resultReports += [ordered]@{
+        name = $benchmarkEntry.Key
+        meanSeconds = $nsStats.Mean / 1000000000
+        medianSeconds = $nsStats.Median / 1000000000
+        minSeconds = $nsStats.Min / 1000000000
+        maxSeconds = $nsStats.Max / 1000000000
+        p95Seconds = $nsStats.P95 / 1000000000
+        p99Seconds = $nsStats.P99 / 1000000000
+        stddevSeconds = $nsStats.StdDev / 1000000000
+        throughputOpsPerSecond = 1000000000 / $nsStats.Mean
+        nsPerOp = $nsStats.Mean
+        bytesPerOp = $bytesStats.Mean
+        allocsPerOp = $allocStats.Mean
+    }
+}
 
 $report = [ordered]@{
     generatedAt = (Get-Date).ToUniversalTime().ToString('o')
     configuration = [ordered]@{
         runs = $Runs
         warmup = $Warmup
-        sampleCount = $benchmarks.Count
+        sampleCount = $resultReports.Count * $Runs
         command = $benchmarkCommand
+        hyperfine = $hyperfineCommand
         goos = $goos
         goarch = $goarch
         cpu = $cpu
     }
-    results = @(
-        [ordered]@{
-            name = 'BenchmarkBoardStep'
-            meanSeconds = $nsStats.Mean / 1000000000
-            medianSeconds = $nsStats.Median / 1000000000
-            minSeconds = $nsStats.Min / 1000000000
-            maxSeconds = $nsStats.Max / 1000000000
-            p95Seconds = $nsStats.P95 / 1000000000
-            p99Seconds = $nsStats.P99 / 1000000000
-            stddevSeconds = $nsStats.StdDev / 1000000000
-            throughputOpsPerSecond = $throughput
-            nsPerOp = $nsStats.Mean
-            bytesPerOp = $bytesStats.Mean
-            allocsPerOp = $allocStats.Mean
-            notes = @(
-                'Mesure du moteur Go sur plusieurs exécutions indépendantes.',
-                'La latence API est mesurée à part dans le frontend, sans rendu canvas.',
-                'Les métriques CPU bas niveau, GC détaillé, I/O, réseau et base de données ne sont pas instrumentées dans ce benchmark.'
-            )
-        }
-    )
+    results = $resultReports
 }
 
 $benchmarksDir = Join-Path $PSScriptRoot 'benchmarks'
@@ -151,10 +149,26 @@ $mdPath = Join-Path $benchmarksDir 'latest.md'
 $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssfff')
 $archiveMdPath = Join-Path $benchmarksDir "benchmark-$timestamp.md"
 $profilePath = Join-Path $benchmarksDir "cpu-$timestamp.prof"
+$memoryProfilePath = Join-Path $benchmarksDir "memory-$timestamp.prof"
+$hyperfinePath = Join-Path $benchmarksDir "hyperfine-$timestamp.json"
 
-$profileOutput = & go test ./game -run '^$' -bench "^$benchmarkName`$" -benchmem -count 1 -cpuprofile $profilePath 2>&1
+$profileOutput = & go test ./game -run '^$' -bench "$benchmarkPattern" -benchmem -count 1 -cpuprofile $profilePath -memprofile $memoryProfilePath 2>&1
 if ($LASTEXITCODE -ne 0) {
     throw "CPU profile failed: $($profileOutput -join [Environment]::NewLine)"
+}
+
+$hyperfine = Get-Command hyperfine -ErrorAction SilentlyContinue
+if ($hyperfine) {
+    & hyperfine --warmup $Warmup --runs $Runs --export-json $hyperfinePath $hyperfineCommand | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Hyperfine benchmark failed"
+    }
+    $report.configuration.hyperfineAvailable = $true
+    $report.configuration.hyperfineReport = [System.IO.Path]::GetFileName($hyperfinePath)
+} else {
+    $report.configuration.hyperfineAvailable = $false
+    $report.configuration.hyperfineReport = $null
+    Write-Warning "Hyperfine n'est pas installé : rapport Go généré sans comparaison Hyperfine."
 }
 
 $report | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding utf8
@@ -164,25 +178,27 @@ $markdown = @"
 
 Généré le : $($report.generatedAt) (UTC)
 
-Profil CPU : ``$([System.IO.Path]::GetFileName($profilePath))``
+Profils : ``$([System.IO.Path]::GetFileName($profilePath))`` (CPU), ``$([System.IO.Path]::GetFileName($memoryProfilePath))`` (mémoire)
 
-| Mesure | Valeur |
+| Paramètre | Valeur |
 | --- | ---: |
-| Runs | $Runs |
-| Warmup | $Warmup |
-| Latence moyenne | $([math]::Round($nsStats.Mean / 1000000, 3)) ms |
-| Médiane | $([math]::Round($nsStats.Median / 1000000, 3)) ms |
-| P95 | $([math]::Round($nsStats.P95 / 1000000, 3)) ms |
-| P99 | $([math]::Round($nsStats.P99 / 1000000, 3)) ms |
-| Maximum | $([math]::Round($nsStats.Max / 1000000, 3)) ms |
-| ns/op | $([math]::Round($nsStats.Mean, 0)) |
-| B/op | $([math]::Round($bytesStats.Mean, 0)) |
-| allocs/op | $([math]::Round($allocStats.Mean, 0)) |
-| Débit | $([math]::Round($throughput, 0)) op/s |
+| Runs Go | $Runs |
+| Warmup Go | $Warmup |
+| Hyperfine | $(if ($report.configuration.hyperfineAvailable) { "oui ($([System.IO.Path]::GetFileName($hyperfinePath)))" } else { 'non installé' }) |
+| Profil | Résultat |
+| CPU | ``$([System.IO.Path]::GetFileName($profilePath))`` |
+| Mémoire | ``$([System.IO.Path]::GetFileName($memoryProfilePath))`` |
+
+## Résultat du tick sur la carte 600 × 600
+
+| Benchmark | Moyenne | P95 | ns/op | B/op | allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: |
+$(($resultReports | ForEach-Object { "| $($_.name) | $([math]::Round($_.meanSeconds * 1000, 3)) ms | $([math]::Round($_.p95Seconds * 1000, 3)) ms | $([math]::Round($_.nsPerOp, 0)) | $([math]::Round($_.bytesPerOp, 0)) | $([math]::Round($_.allocsPerOp, 0)) |" }) -join "`n")
 
 ## Notes
 
-- Mesure du moteur Go sur plusieurs exécutions indépendantes.
+- Mesure du calcul du tick sur une carte 600 × 600.
+- La carte et le générateur aléatoire utilisent toujours la seed 42.
 - La latence API est mesurée à part dans le frontend, sans rendu canvas.
 - Les métriques CPU bas niveau, GC détaillé, I/O, réseau et base de données ne sont pas instrumentées dans ce benchmark.
 "@
@@ -190,4 +206,16 @@ Profil CPU : ``$([System.IO.Path]::GetFileName($profilePath))``
 $markdown | Set-Content -Path $mdPath -Encoding utf8
 $markdown | Set-Content -Path $archiveMdPath -Encoding utf8
 
-Write-Host "Benchmarks écrits dans $jsonPath, $mdPath, $archiveMdPath et $profilePath"
+Write-Host "Benchmarks écrits dans $jsonPath, $mdPath et $archiveMdPath"
+Write-Host "Profils écrits dans $profilePath et $memoryProfilePath"
+if ($report.configuration.hyperfineAvailable) { Write-Host "Rapport Hyperfine écrit dans $hyperfinePath" }
+
+$python = Get-Command python -ErrorAction SilentlyContinue
+if (-not $python) {
+    throw "Python est requis pour générer le rapport de benchmark."
+}
+
+& $python.Source (Join-Path $PSScriptRoot 'generate_benchmark.py') --dir $benchmarksDir
+if ($LASTEXITCODE -ne 0) {
+    throw "La génération du rapport de benchmark a échoué."
+}
