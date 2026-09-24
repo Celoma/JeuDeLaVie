@@ -280,7 +280,7 @@
     if (tickInFlight) return;
     tickInFlight = true;
     try {
-      const board = await fetchJsonTimed('/api/tick', { method: 'POST' }, 'tick');
+      const board = await fetchJsonTimed('/api/map/tick', { method: 'POST' }, 'tick');
       if (board.people) {
         map = board;
         updateStats();

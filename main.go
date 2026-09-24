@@ -78,6 +78,7 @@ func main() {
 	mux.HandleFunc("/api/benchmarks", handleBenchmarks)
 	mux.HandleFunc("/api/benchmark", state.handleBenchmark)
 	mux.HandleFunc("/api/tick", state.handleTick)
+	mux.HandleFunc("/api/map/tick", state.handleMapTick)
 	mux.HandleFunc("/api/reset", state.handleReset)
 	mux.Handle("/", http.FileServer(http.Dir(filepath.Join(".", "frontend"))))
 
@@ -167,6 +168,17 @@ func (server *server) handleTick(response http.ResponseWriter, request *http.Req
 	}
 	server.mu.Lock()
 	server.simulation.Step()
+	server.population.Step(server.simulation.Rules, server.mapRNG)
+	server.mu.Unlock()
+	server.writeMap(response)
+}
+
+func (server *server) handleMapTick(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	server.mu.Lock()
 	server.population.Step(server.simulation.Rules, server.mapRNG)
 	server.mu.Unlock()
 	server.writeMap(response)
