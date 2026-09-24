@@ -3,6 +3,8 @@ package game
 import (
 	"encoding/json"
 	"math/rand"
+	"runtime"
+	"sync"
 )
 
 type CellState uint8
@@ -32,6 +34,8 @@ type Board struct {
 
 	nextCells   []CellState
 	bucketHeads []int
+	closeCounts []int
+	farCounts   []int
 }
 
 func (board Board) MarshalJSON() ([]byte, error) {
@@ -110,12 +114,12 @@ func (board *Board) Step(config ContaminationConfig, source *rand.Rand) {
 		board.bucketHeads[index] = index
 	}
 
+	board.countInfectionCandidates(config)
 	for index, cell := range board.Cells {
 		if cell != CellHealthy {
 			continue
 		}
-		column, row := board.coordinates(index)
-		if board.shouldInfect(column, row, config, source) {
+		if shouldInfectFromCounts(board.closeCounts[index], board.farCounts[index], config, source) {
 			next[index] = CellInfected
 		}
 	}
@@ -124,6 +128,28 @@ func (board *Board) Step(config ContaminationConfig, source *rand.Rand) {
 }
 
 func (board *Board) shouldInfect(column, row int, config ContaminationConfig, source *rand.Rand) bool {
+	closeCandidates, farCandidates := board.infectionCandidateCounts(column, row, config)
+	return shouldInfectFromCounts(closeCandidates, farCandidates, config, source)
+}
+
+func shouldInfectFromCounts(closeCandidates, farCandidates int, config ContaminationConfig, source *rand.Rand) bool {
+	if closeCandidates > 0 {
+		for range closeCandidates {
+			if source.Float64() < config.CloseChance {
+				return true
+			}
+		}
+		return false
+	}
+	for range farCandidates {
+		if source.Float64() < config.FarChance {
+			return true
+		}
+	}
+	return false
+}
+
+func (board *Board) infectionCandidateCounts(column, row int, config ContaminationConfig) (int, int) {
 	closeRadiusSquared := config.CloseRadius * config.CloseRadius
 	farRadiusSquared := config.FarRadius * config.FarRadius
 	closeCandidates := 0
@@ -147,29 +173,51 @@ func (board *Board) shouldInfect(column, row int, config ContaminationConfig, so
 		}
 	}
 
-	for range closeCandidates {
-		if source.Float64() < config.CloseChance {
-			return true
+	return closeCandidates, farCandidates
+}
+
+func (board *Board) countInfectionCandidates(config ContaminationConfig) {
+	workerCount := min(runtime.GOMAXPROCS(0), (len(board.Cells)+1023)/1024)
+	if workerCount < 2 {
+		for index, cell := range board.Cells {
+			if cell != CellHealthy {
+				continue
+			}
+			column, row := board.coordinates(index)
+			board.closeCounts[index], board.farCounts[index] = board.infectionCandidateCounts(column, row, config)
 		}
+		return
 	}
-	if closeCandidates > 0 {
-		return false
+
+	var waitGroup sync.WaitGroup
+	chunkSize := (len(board.Cells) + workerCount - 1) / workerCount
+	waitGroup.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		start := worker * chunkSize
+		end := min(len(board.Cells), start+chunkSize)
+		go func() {
+			defer waitGroup.Done()
+			for index := start; index < end; index++ {
+				if board.Cells[index] != CellHealthy {
+					continue
+				}
+				column, row := board.coordinates(index)
+				board.closeCounts[index], board.farCounts[index] = board.infectionCandidateCounts(column, row, config)
+			}
+		}()
 	}
-	for range farCandidates {
-		if source.Float64() < config.FarChance {
-			return true
-		}
-	}
-	return false
+	waitGroup.Wait()
 }
 
 func (board *Board) ensureScratch() {
 	cellCount := len(board.Cells)
-	if len(board.nextCells) == cellCount && len(board.bucketHeads) == cellCount {
+	if len(board.nextCells) == cellCount && len(board.bucketHeads) == cellCount && len(board.closeCounts) == cellCount && len(board.farCounts) == cellCount {
 		return
 	}
 	board.nextCells = make([]CellState, cellCount)
 	board.bucketHeads = make([]int, cellCount)
+	board.closeCounts = make([]int, cellCount)
+	board.farCounts = make([]int, cellCount)
 	for index := range board.bucketHeads {
 		board.bucketHeads[index] = -1
 	}

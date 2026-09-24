@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"math/rand"
+	"runtime"
+	"sync"
 )
 
 const (
@@ -48,6 +50,8 @@ type PopulationMap struct {
 	infectedIndices []int
 	infectedHeads   []int
 	nextInfected    []int
+	closeCounts     []int
+	farCounts       []int
 }
 
 func (populationMap *PopulationMap) Step(config ContaminationConfig, source *rand.Rand) {
@@ -79,17 +83,29 @@ func (populationMap *PopulationMap) Step(config ContaminationConfig, source *ran
 		populationMap.infectedHeads[bucket] = infectedIndex
 	}
 
+	populationMap.countInfectionCandidates(config)
 	for index, person := range populationMap.People {
 		if person.Infected || person.Dead || person.Immune {
 			continue
 		}
-		if populationMap.shouldInfect(index, config, source) {
+		if shouldInfectFromCounts(populationMap.closeCounts[index], populationMap.farCounts[index], config, source) {
 			populationMap.People[index].Infected = true
 		}
 	}
 }
 
 func (populationMap *PopulationMap) shouldInfect(index int, config ContaminationConfig, source *rand.Rand) bool {
+	closeCandidates, farCandidates := populationMap.infectionCandidateCounts(index, config)
+	if closeCandidates > 0 {
+		closeCandidates++
+		farCandidates = 0
+	} else {
+		closeCandidates = farCandidates
+	}
+	return shouldInfectFromCounts(closeCandidates, farCandidates, config, source)
+}
+
+func (populationMap *PopulationMap) infectionCandidateCounts(index int, config ContaminationConfig) (int, int) {
 	closeCandidates := 0
 	farCandidates := 0
 	target := populationMap.People[index]
@@ -114,30 +130,52 @@ func (populationMap *PopulationMap) shouldInfect(index int, config Contamination
 			}
 		}
 	}
-	chance := config.FarChance
-	if closeCandidates > 0 {
-		chance = config.CloseChance
-		closeCandidates += 1
-	} else {
-		closeCandidates = farCandidates
-	}
-	for range closeCandidates {
-		if source.Float64() < chance {
-			return true
+	return closeCandidates, farCandidates
+}
+
+func (populationMap *PopulationMap) countInfectionCandidates(config ContaminationConfig) {
+	workerCount := min(runtime.GOMAXPROCS(0), (len(populationMap.People)+1023)/1024)
+	if workerCount < 2 {
+		for index, person := range populationMap.People {
+			if person.Infected || person.Dead || person.Immune {
+				continue
+			}
+			populationMap.closeCounts[index], populationMap.farCounts[index] = populationMap.infectionCandidateCounts(index, config)
 		}
+		return
 	}
-	return false
+
+	var waitGroup sync.WaitGroup
+	chunkSize := (len(populationMap.People) + workerCount - 1) / workerCount
+	waitGroup.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		start := worker * chunkSize
+		end := min(len(populationMap.People), start+chunkSize)
+		go func() {
+			defer waitGroup.Done()
+			for index := start; index < end; index++ {
+				person := populationMap.People[index]
+				if person.Infected || person.Dead || person.Immune {
+					continue
+				}
+				populationMap.closeCounts[index], populationMap.farCounts[index] = populationMap.infectionCandidateCounts(index, config)
+			}
+		}()
+	}
+	waitGroup.Wait()
 }
 
 func (populationMap *PopulationMap) ensureScratch() {
 	peopleCount := len(populationMap.People)
 	cellCount := populationMap.Width * populationMap.Height
-	if cap(populationMap.infectedIndices) == peopleCount && len(populationMap.infectedHeads) == cellCount && len(populationMap.nextInfected) == peopleCount {
+	if cap(populationMap.infectedIndices) == peopleCount && len(populationMap.infectedHeads) == cellCount && len(populationMap.nextInfected) == peopleCount && len(populationMap.closeCounts) == peopleCount && len(populationMap.farCounts) == peopleCount {
 		return
 	}
 	populationMap.infectedIndices = make([]int, 0, peopleCount)
 	populationMap.infectedHeads = make([]int, cellCount)
 	populationMap.nextInfected = make([]int, peopleCount)
+	populationMap.closeCounts = make([]int, peopleCount)
+	populationMap.farCounts = make([]int, peopleCount)
 	for index := range populationMap.infectedHeads {
 		populationMap.infectedHeads[index] = -1
 	}

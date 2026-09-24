@@ -3,6 +3,7 @@ bin/
 
 # Les benchmarks bruts restent locaux ; seuls les rapports PDF sont versionnes.
 benchmarks/*
+!benchmarks/bilan-optimisations-backend.md
 !benchmarks/pdf/
 benchmarks/pdf/*
 !benchmarks/pdf/*.pdf
