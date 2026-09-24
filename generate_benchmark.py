@@ -299,6 +299,69 @@ def make_complexity_illustration(out_path):
     plt.close()
 
 
+def make_hyperfine_chart(hyperfine, out_path):
+    """Génère une vue des temps individuels et de la dispersion Hyperfine."""
+    if not hyperfine or not hyperfine.get("results"):
+        return False
+    result = hyperfine["results"][0]
+    times = result.get("times") or []
+    if not times:
+        return False
+    fig, ax = plt.subplots(figsize=(6.6, 3.8), dpi=200)
+    runs = list(range(1, len(times) + 1))
+    ax.plot(runs, [value * 1000 for value in times], marker="o", linewidth=2,
+            color=COLORS_HEX[1], label="Temps par run")
+    ax.axhline(result.get("mean", 0) * 1000, color=COLORS_HEX[0], linestyle="--",
+               linewidth=1.5, label=f"Moyenne ({result.get('mean', 0) * 1000:.2f} ms)")
+    ax.set_xlabel("Execution Hyperfine")
+    ax.set_ylabel("Temps (ms)")
+    ax.set_title("Hyperfine — dispersion des temps de processus")
+    ax.set_xticks(runs)
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(fontsize=8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+    return True
+
+
+def make_go_samples_chart(results, out_path):
+    """Compare les échantillons Go ns/op, B/op et allocations/op."""
+    if not results:
+        return False
+    result = results[0]
+    ns = result.get("nsSamples") or []
+    bytes_per_op = result.get("bytesSamples") or []
+    allocs = result.get("allocsSamples") or []
+    if not ns:
+        return False
+    runs = list(range(1, len(ns) + 1))
+    fig, axes = plt.subplots(3, 1, figsize=(6.8, 6.4), dpi=200, sharex=True)
+    series = [
+        (ns, "ns/op", "Temps Go", COLORS_HEX[0]),
+        (bytes_per_op, "B/op", "Mémoire allouée", COLORS_HEX[1]),
+        (allocs, "allocs/op", "Allocations", COLORS_HEX[2]),
+    ]
+    for axis, (values, unit, title, color) in zip(axes, series):
+        if values:
+            axis.plot(runs[:len(values)], values, marker="o", color=color, linewidth=1.8)
+            axis.axhline(sum(values) / len(values), color="#777777", linestyle="--", linewidth=1)
+        axis.set_ylabel(unit)
+        axis.set_title(title, loc="left", fontsize=9)
+        axis.grid(axis="y", alpha=0.2)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+    axes[-1].set_xlabel("Execution Go")
+    axes[-1].set_xticks(runs)
+    fig.suptitle("Go benchmark — stabilité des mesures", fontsize=11)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+    return True
+
+
 # ========================================================================
 # 4. Construction du PDF
 # ========================================================================
@@ -426,17 +489,52 @@ def build_pdf(out_pdf, ctx):
                           ("min", "Min"), ("max", "Max")]:
             v = hres.get(k)
             hf_rows.append([label, f"{v:.4f} s" if isinstance(v, (int, float)) else "n/a"])
+        times = hres.get("times") or []
+        memory_samples = hres.get("memory_usage_byte") or []
+        if times:
+            hf_rows.append(["Runs mesurés", str(len(times))])
+            hf_rows.append(["Coefficient de variation", f"{(hres.get('stddev', 0) / hres.get('mean', 1) * 100):.2f}%"])
+        if memory_samples and any(memory_samples):
+            hf_rows.append(["Pic mémoire Hyperfine", f"{max(memory_samples) / 1024 / 1024:.2f} MiB"])
+        elif cfg.get("processMemory", {}).get("peakWorkingSetBytes"):
+            process_memory = cfg["processMemory"]
+            hf_rows.append(["Pic WorkingSet commande Go", f"{process_memory['peakWorkingSetBytes'] / 1024 / 1024:.2f} MiB"])
+            hf_rows.append(["Pic mémoire privée commande Go", f"{process_memory.get('peakPrivateBytes', 0) / 1024 / 1024:.2f} MiB"])
+        else:
+            hf_rows.append(["Mémoire Hyperfine", "Indisponible sur cette exécution"])
         story.append(styled_table(hf_rows, [60 * mm, 102 * mm]))
+        if ctx.get("hyperfine_chart"):
+            story.append(Spacer(1, 8))
+            story.append(Image(ctx["hyperfine_chart"], width=145 * mm, height=84 * mm))
+            story.append(Paragraph("Figure — Temps de chaque exécution Hyperfine et moyenne.", styles["Caption"]))
+
+    if ctx.get("go_samples_chart"):
+        story.append(Spacer(1, 8))
+        story.append(Image(ctx["go_samples_chart"], width=145 * mm, height=137 * mm))
+        story.append(Paragraph("Figure — Dispersion des mesures Go : temps, mémoire allouée et allocations.", styles["Caption"]))
 
     story.append(Spacer(1, 8))
     story.append(Paragraph("Résumé CPU et mémoire", styles["H2"]))
     resource_rows = [["Mesure", "Valeur"]]
     cpu_profile = ctx.get("cpu_parsed")
     memory_profile = ctx.get("mem_parsed")
+    memory_inuse_profile = ctx.get("mem_inuse_parsed")
     if cpu_profile:
         resource_rows.append(["CPU échantillonné (pprof)", f"{cpu_profile['total_value']:.2f}{cpu_profile['total_unit']}"])
     if memory_profile:
         resource_rows.append(["Mémoire allouée (pprof)", f"{memory_profile['total_value']:.2f}{memory_profile['total_unit']}"])
+    if memory_inuse_profile:
+        resource_rows.append(["Heap vivant (pprof)", f"{memory_inuse_profile['total_value']:.2f}{memory_inuse_profile['total_unit']}"])
+    system_memory = cfg.get("systemMemory") or {}
+    if system_memory.get("totalBytes"):
+        total_mib = system_memory["totalBytes"] / 1024 / 1024
+        available_mib = system_memory.get("availableBytes", 0) / 1024 / 1024
+        used_mib = system_memory.get("usedBytes", 0) / 1024 / 1024
+        resource_rows.extend([
+            ["RAM physique totale", f"{total_mib:.0f} MiB"],
+            ["RAM physique disponible", f"{available_mib:.0f} MiB"],
+            ["RAM physique utilisée", f"{used_mib:.0f} MiB"],
+        ])
     for result in ctx.get("bench_results", []):
         resource_rows.append(["Mémoire par opération", f"{result.get('bytesPerOp', '—')} B/op"])
     if len(resource_rows) > 1:
@@ -456,6 +554,14 @@ def build_pdf(out_pdf, ctx):
             ["Objectif mémoire maximal", f"{gc['maxGoalMb']:.2f} MB"],
         ]
         story.append(styled_table(gc_rows, [75 * mm, 87 * mm], header=False))
+
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        "La RAM physique est l'état du système au lancement du benchmark. La mémoire pprof "
+        "mesure le heap Go échantillonné (alloué ou encore vivant), pas toute la mémoire RSS "
+        "du processus. Hyperfine peut fournir le RSS quand le backend système le supporte ; "
+        "une valeur nulle est donc signalée comme indisponible.",
+        styles["BodySmall"]))
 
     # ---------------- 2. CPU ----------------
     if ctx.get("cpu_parsed") and ctx["cpu_parsed"]["rows"]:
@@ -530,6 +636,10 @@ def build_pdf(out_pdf, ctx):
         if ctx.get("mem_chart"):
             story.append(Image(ctx["mem_chart"], width=140 * mm, height=91.9 * mm))
             story.append(Paragraph("Figure — Répartition des allocations mémoire par fonction.", styles["Caption"]))
+
+        if ctx.get("mem_inuse_chart"):
+            story.append(Image(ctx["mem_inuse_chart"], width=140 * mm, height=91.9 * mm))
+            story.append(Paragraph("Figure — Heap Go encore vivant par fonction (pprof -inuse_space).", styles["Caption"]))
 
         if ctx.get("mem_graph_png"):
             story.append(Image(ctx["mem_graph_png"], width=150 * mm, height=150 * mm * (ctx["mem_graph_size"][1] / ctx["mem_graph_size"][0])))
@@ -643,6 +753,15 @@ def main():
                                      "Répartition des allocations mémoire par fonction (top)",
                                      "Mémoire allouée cumulée"):
                 ctx["mem_chart"] = chart_path
+        inuse_text = run_pprof_top(mem_prof, extra_flag="-inuse_space")
+        mem_inuse_parsed = parse_pprof_top(inuse_text)
+        ctx["mem_inuse_parsed"] = mem_inuse_parsed
+        if mem_inuse_parsed and mem_inuse_parsed["rows"]:
+            chart_path = os.path.join(tmpdir, "mem_inuse_chart.png")
+            if make_breakdown_chart(mem_inuse_parsed, chart_path,
+                                     "Heap Go vivant par fonction (pprof)",
+                                     "Heap vivant"):
+                ctx["mem_inuse_chart"] = chart_path
         png_path = os.path.join(tmpdir, "mem_graph.png")
         if run_pprof_png(mem_prof, png_path, extra_flag="-alloc_space"):
             from PIL import Image as PILImage
@@ -652,6 +771,13 @@ def main():
     complexity_path = os.path.join(tmpdir, "complexity.png")
     make_complexity_illustration(complexity_path)
     ctx["complexity_chart"] = complexity_path
+
+    hyperfine_chart_path = os.path.join(tmpdir, "hyperfine_chart.png")
+    if make_hyperfine_chart(hyperfine, hyperfine_chart_path):
+        ctx["hyperfine_chart"] = hyperfine_chart_path
+    go_samples_chart_path = os.path.join(tmpdir, "go_samples_chart.png")
+    if make_go_samples_chart(bench_results, go_samples_chart_path):
+        ctx["go_samples_chart"] = go_samples_chart_path
 
     if args.output:
         out_pdf = args.output

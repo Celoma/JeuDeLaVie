@@ -10,19 +10,33 @@ le calcul d'un tick Go, sans HTTP, rendu frontend, disque ni reseau.
 
 Sur le benchmark comparable d'une carte de 600 x 600, le temps moyen d'un tick
 est passe de **632,765 ms** avant optimisation a **123,491 ms** apres la
-premiere optimisation, puis a **4,594 ms** avec le comptage parallele present
-dans le workspace.
+premiere optimisation. Le dernier benchmark mesure **6,346 ms** avec
+l'indexation, le comptage parallele, le pool persistant, la preallocation des
+buffers et les offsets circulaires.
 
 | Etat | Temps moyen | Gain vs initial | Allocations | Debit theorique |
 | --- | ---: | ---: | ---: | ---: |
 | Avant optimisation | 632,765 ms | - | 24 allocs/op | 1,58 tick/s |
 | Indexation spatiale | 123,491 ms | 5,1x plus rapide | 0 alloc/op | 8,10 tick/s |
-| Indexation + multithreading | 4,594 ms | 137,7x plus rapide | 17 allocs/op | 217,7 tick/s |
+| Indexation + goroutines par tick | 4,594 ms | 137,7x plus rapide | 17 allocs/op | 217,7 tick/s |
+| Indexation + pool + buffers + offsets circulaires | 6,346 ms | 99,7x plus rapide | 0 allocs/op | 157,6 tick/s |
 
 Le dernier chiffre est une mesure de cinq executions avec deux warmups. Il
-correspond au code actuel, dont la partie multithreading n'est pas encore
-presente dans un commit historique. Il faut donc le considerer comme le
-resultat de l'arbre de travail actuel, pas comme une mesure d'une release.
+correspond au code actuel, qui contient le pool de workers persistant et les
+buffers prealloues. Il faut donc le considerer comme le resultat de l'arbre de
+travail actuel, pas comme la mesure d'une release versionnee.
+
+## Ordre des quatre optimisations
+
+La reduction de la taille de la carte et la mise en place du benchmark sont des
+etapes de preparation de la mesure. Les quatre optimisations du moteur sont :
+
+1. **Indexation spatiale** de `Board`, puis extension a `PopulationMap`.
+2. **Comptage parallele** des candidats avec plusieurs goroutines.
+3. **Pool de workers persistants**, avec preallocation des buffers pour eviter
+  les allocations a chaque tick.
+4. **Offsets circulaires**, pour ne parcourir que le disque reel du rayon au
+  lieu de toute sa boite carree.
 
 ## Etat initial
 
@@ -76,7 +90,7 @@ Le benchmark principal est stabilise sur une carte 600 x 600, une densite de
 percentiles et mesures de memoire. Cette etape n'accelere pas le moteur, mais
 rend les comparaisons suivantes fiables.
 
-### 24 septembre, 10:29 : indexation spatiale de `Board`
+### Optimisation 1 — 24 septembre, 10:29 : indexation spatiale de `Board`
 
 Commit `948ceb5` - `premiere optimisation`.
 
@@ -98,7 +112,7 @@ Resultat mesure dans `benchmark-20260924-083014515.md` :
 Le gain principal vient de la reduction du nombre de voisins examines. La
 reutilisation des buffers supprime en plus la pression du garbage collector.
 
-### 24 septembre, 10:37 : indexation spatiale de `PopulationMap`
+#### Extension de l'optimisation 1 a `PopulationMap`
 
 Commit `e056e3c` - `optimisation front, lenteur`.
 
@@ -115,7 +129,7 @@ pas de comparaison historique strictement equivalente avant/apres pour
 cette mesure inclut aussi le multithreading du workspace et ne permet pas
 d'isoler le gain de cet unique commit.
 
-### 24 septembre : comptage parallele des candidats
+### Optimisation 2 — 24 septembre : comptage parallele des candidats
 
 Modification actuellement presente dans `game/game.go` et
 `game/map_generator.go`.
@@ -134,19 +148,88 @@ Mesure de cinq runs et deux warmups dans
 - latence reduite de **96,3 %** par rapport a l'indexation seule ;
 - **40 187 B/op** et **17 allocations/op**.
 
-Le temps est fortement reduit, mais le parallellisme ajoute des allocations et
-un cout de coordination. Pour les petites cartes, le code conserve un chemin
-sequentiel afin d'eviter de lancer inutilement des workers.
+Le temps est fortement reduit, mais la creation de goroutines a chaque tick
+ajoute des allocations et un cout de coordination. Pour les petites cartes,
+le code conserve un chemin sequentiel afin d'eviter de lancer inutilement des
+workers.
+
+### Optimisation 3 — 24 septembre : pool de workers persistants
+
+Modification actuellement presente dans `game/game.go` et
+`game/map_generator.go`.
+
+Les workers ne sont plus recrees a chaque tick :
+
+- un pool est initialise une seule fois avec `runtime.GOMAXPROCS(0)` workers ;
+- chaque tick envoie des secteurs au pool via un canal reutilise ;
+- les buffers de compteurs et les `WaitGroup` appartiennent aux cartes et sont
+  reutilises ;
+- le chemin sequentiel est conserve pour les petites cartes.
+
+Une mesure intermediaire de cinq runs et deux warmups donnait :
+
+- **4,594 ms -> 4,321 ms** ;
+- gain supplementaire de **5,9 %** sur la latence ;
+- **17 -> 0 allocations/op** reportees ;
+- **35 503 B/op** ;
+- debit theorique : **231,4 ticks/s**.
+
+Le pool supprime donc les allocations liees au lancement repete des goroutines.
+La latence varie selon la charge de la machine ; le gain principal de cette
+etape est la suppression des allocations de goroutines, pas une garantie de
+gain de latence a chaque execution.
+
+#### Preallocation des buffers dans l'optimisation 3
+
+Les tableaux `closeCounts` et `farCounts` de `Board`, ainsi que les buffers
+scratch de `PopulationMap`, sont maintenant alloues dans les constructeurs,
+avant le debut de la mesure du tick.
+
+Resultat du benchmark officiel final, cinq runs et deux warmups :
+
+- **0,4 B/op** ;
+- **0 allocs/op** ;
+- le benchmark cible affiche **0 B/op** sur une execution directe ;
+- temps moyen : **6,265 ms/op** ;
+- debit theorique : **159,6 ticks/s**.
+
+Le `0,4 B/op` du rapport est un reliquat moyen arrondi provenant de la mesure
+du runtime ; les allocations par tick sont nulles dans le benchmark cible.
+
+### Optimisation 4 — 24 septembre : offsets circulaires du voisinage
+
+Modification presente dans `game/game.go` et `game/map_generator.go`.
+
+La recherche ne parcourt plus toute la boite carree du `FarRadius`. Une liste
+d'offsets appartenant au disque du rayon est construite une fois puis reutilisee
+par les ticks suivants :
+
+- les cases situees dans les coins de la boite sont ignorees ;
+- la distance au centre est pre-calculee dans chaque offset ;
+- les deux moteurs (`Board` et `PopulationMap`) utilisent le meme principe ;
+- les offsets sont mis en cache et les benchmarks les prechauffent avant la
+  mesure pour conserver `0 B/op` et `0 allocs/op` en steady-state.
+
+Sur une execution ciblee, `BenchmarkTick` est passe d'environ `6,09 ms` avec
+le balayage carre a `5,14 ms` avec les offsets circulaires, soit environ
+**15,6 %** de mieux. Le run officiel suivant a signale un outlier Hyperfine et
+mesure `6,346 ms`; le gain doit donc etre confirme sur une machine calme avec
+plusieurs repetitions.
 
 ## Etat apres optimisation
 
 Sur la charge de reference 600 x 600 :
 
-- le calcul est passe d'environ 0,63 seconde a environ 4,6 millisecondes ;
-- le debit theorique est passe d'environ 1,58 a 217,7 ticks par seconde ;
+- le calcul est passe d'environ 0,63 seconde a environ 6,3 millisecondes sur
+  le dernier run officiel ;
+- le debit theorique est passe d'environ 1,58 a 157,6 ticks par seconde sur ce
+  run ;
 - l'indexation a supprime les allocations du tick avant l'ajout des goroutines ;
-- le multithreading apporte le gain de temps restant, au prix de 17
-  allocations et environ 40 Ko par operation ;
+- le pool persistant conserve le multithreading tout en ramenant les allocations
+  reportees a 0 par operation ;
+- la preallocation des buffers ramene la memoire par operation a environ 0 B/op ;
+- les offsets circulaires reduisent le nombre de cases vides examinees, mais
+  leur gain doit etre confirme avec des runs sans outlier ;
 - le calcul de `PopulationMap` est egalement indexe et parallele, mais son gain
   historique reste a mesurer avec un benchmark dedie comparable.
 
@@ -160,6 +243,9 @@ Sur la charge de reference 600 x 600 :
   les fichiers ou le reseau.
 - Les mesures de 4 a 7 ms dependent de la charge de la machine et du nombre de
   processeurs logiques disponibles.
+- Le benchmark final est mesure avec le pool persistant : les premiers ticks
+  peuvent inclure son initialisation, alors que les ticks suivants reutilisent
+  les workers.
 - Le multithreading est valide par `go test ./...`, mais le test race Go n'a
   pas ete execute dans l'environnement Windows actuel car CGO est desactive.
 

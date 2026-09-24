@@ -47,15 +47,19 @@ type PopulationMap struct {
 	Settlements []Settlement `json:"settlements"`
 	People      []Person     `json:"people"`
 
-	infectedIndices []int
-	infectedHeads   []int
-	nextInfected    []int
-	closeCounts     []int
-	farCounts       []int
+	infectedIndices    []int
+	infectedHeads      []int
+	nextInfected       []int
+	closeCounts        []int
+	farCounts          []int
+	candidateWaitGroup sync.WaitGroup
+	candidateOffsets   []candidateOffset
+	candidateRadius    int
 }
 
 func (populationMap *PopulationMap) Step(config ContaminationConfig, source *rand.Rand) {
 	populationMap.ensureScratch()
+	populationMap.ensureCandidateOffsets(config.FarRadius)
 	infected := populationMap.infectedIndices[:0]
 	for index, person := range populationMap.People {
 		if !person.Infected || person.Dead {
@@ -111,26 +115,31 @@ func (populationMap *PopulationMap) infectionCandidateCounts(index int, config C
 	target := populationMap.People[index]
 	closeRadiusSquared := config.CloseRadius * config.CloseRadius
 	farRadiusSquared := config.FarRadius * config.FarRadius
-	minX := max(0, target.X-config.FarRadius)
-	maxX := min(populationMap.Width-1, target.X+config.FarRadius)
-	minY := max(0, target.Y-config.FarRadius)
-	maxY := min(populationMap.Height-1, target.Y+config.FarRadius)
-	for y := minY; y <= maxY; y++ {
-		for x := minX; x <= maxX; x++ {
-			infectedIndex := populationMap.infectedHeads[populationMap.index(x, y)]
-			for infectedIndex != -1 {
-				infectedPerson := populationMap.People[infectedIndex]
-				distance := squaredDistance(target.X, target.Y, infectedPerson.X, infectedPerson.Y)
-				if distance <= closeRadiusSquared {
-					closeCandidates++
-				} else if distance <= farRadiusSquared {
-					farCandidates++
-				}
-				infectedIndex = populationMap.nextInfected[infectedIndex]
+	for _, offset := range populationMap.candidateOffsets {
+		candidateX := target.X + offset.deltaColumn
+		candidateY := target.Y + offset.deltaRow
+		if candidateX < 0 || candidateX >= populationMap.Width || candidateY < 0 || candidateY >= populationMap.Height {
+			continue
+		}
+		infectedIndex := populationMap.infectedHeads[populationMap.index(candidateX, candidateY)]
+		for infectedIndex != -1 {
+			if offset.distanceSq <= closeRadiusSquared {
+				closeCandidates++
+			} else if offset.distanceSq <= farRadiusSquared {
+				farCandidates++
 			}
+			infectedIndex = populationMap.nextInfected[infectedIndex]
 		}
 	}
 	return closeCandidates, farCandidates
+}
+
+func (populationMap *PopulationMap) ensureCandidateOffsets(radius int) {
+	if populationMap.candidateRadius == radius && populationMap.candidateOffsets != nil {
+		return
+	}
+	populationMap.candidateOffsets = buildCandidateOffsets(radius)
+	populationMap.candidateRadius = radius
 }
 
 func (populationMap *PopulationMap) countInfectionCandidates(config ContaminationConfig) {
@@ -145,24 +154,15 @@ func (populationMap *PopulationMap) countInfectionCandidates(config Contaminatio
 		return
 	}
 
-	var waitGroup sync.WaitGroup
+	candidatePoolOnce.Do(startCandidatePool)
 	chunkSize := (len(populationMap.People) + workerCount - 1) / workerCount
-	waitGroup.Add(workerCount)
+	populationMap.candidateWaitGroup.Add(workerCount)
 	for worker := 0; worker < workerCount; worker++ {
 		start := worker * chunkSize
 		end := min(len(populationMap.People), start+chunkSize)
-		go func() {
-			defer waitGroup.Done()
-			for index := start; index < end; index++ {
-				person := populationMap.People[index]
-				if person.Infected || person.Dead || person.Immune {
-					continue
-				}
-				populationMap.closeCounts[index], populationMap.farCounts[index] = populationMap.infectionCandidateCounts(index, config)
-			}
-		}()
+		candidateJobs <- candidateJob{populationMap: populationMap, config: config, start: start, end: end, waitGroup: &populationMap.candidateWaitGroup}
 	}
-	waitGroup.Wait()
+	populationMap.candidateWaitGroup.Wait()
 }
 
 func (populationMap *PopulationMap) ensureScratch() {
@@ -186,6 +186,7 @@ func (populationMap *PopulationMap) index(x, y int) int {
 }
 
 func GeneratePopulationMap(width, height int, seed int64) *PopulationMap {
+	candidatePoolOnce.Do(startCandidatePool)
 	source := rand.New(rand.NewSource(seed))
 	settlementCount := width*height/10000 + 1
 	settlements := make([]Settlement, settlementCount)
@@ -212,7 +213,7 @@ func GeneratePopulationMap(width, height int, seed int64) *PopulationMap {
 	}
 	people[source.Intn(len(people))].Infected = true
 
-	return &PopulationMap{
+	populationMap := &PopulationMap{
 		Width:           width,
 		Height:          height,
 		Seed:            seed,
@@ -222,6 +223,8 @@ func GeneratePopulationMap(width, height int, seed int64) *PopulationMap {
 		infectedHeads:   newInfectedHeads(width * height),
 		nextInfected:    make([]int, len(people)),
 	}
+	populationMap.ensureScratch()
+	return populationMap
 }
 
 func newInfectedHeads(size int) []int {

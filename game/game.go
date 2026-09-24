@@ -32,13 +32,66 @@ type Board struct {
 	Height int         `json:"height"`
 	Cells  []CellState `json:"cells"`
 
-	nextCells   []CellState
-	bucketHeads []int
-	closeCounts []int
-	farCounts   []int
+	nextCells          []CellState
+	bucketHeads        []int
+	closeCounts        []int
+	farCounts          []int
+	candidateWaitGroup sync.WaitGroup
+	candidateOffsets   []candidateOffset
+	candidateRadius    int
 }
 
-func (board Board) MarshalJSON() ([]byte, error) {
+type candidateOffset struct {
+	deltaColumn int
+	deltaRow    int
+	distanceSq  int
+}
+
+type candidateJob struct {
+	board         *Board
+	populationMap *PopulationMap
+	config        ContaminationConfig
+	start         int
+	end           int
+	waitGroup     *sync.WaitGroup
+}
+
+var (
+	candidatePoolOnce    sync.Once
+	candidateJobs        chan candidateJob
+	candidateWorkerCount int
+)
+
+func startCandidatePool() {
+	candidateWorkerCount = runtime.GOMAXPROCS(0)
+	candidateJobs = make(chan candidateJob, candidateWorkerCount)
+	for range candidateWorkerCount {
+		go func() {
+			for job := range candidateJobs {
+				if job.board != nil {
+					for index := job.start; index < job.end; index++ {
+						if job.board.Cells[index] != CellHealthy {
+							continue
+						}
+						column, row := job.board.coordinates(index)
+						job.board.closeCounts[index], job.board.farCounts[index] = job.board.infectionCandidateCounts(column, row, job.config)
+					}
+				} else {
+					for index := job.start; index < job.end; index++ {
+						person := job.populationMap.People[index]
+						if person.Infected || person.Dead || person.Immune {
+							continue
+						}
+						job.populationMap.closeCounts[index], job.populationMap.farCounts[index] = job.populationMap.infectionCandidateCounts(index, job.config)
+					}
+				}
+				job.waitGroup.Done()
+			}
+		}()
+	}
+}
+
+func (board *Board) MarshalJSON() ([]byte, error) {
 	cells := make([]int, len(board.Cells))
 	for index, cell := range board.Cells {
 		cells[index] = int(cell)
@@ -51,6 +104,7 @@ func (board Board) MarshalJSON() ([]byte, error) {
 }
 
 func NewBoard(width, height int) *Board {
+	candidatePoolOnce.Do(startCandidatePool)
 	cellCount := width * height
 	bucketHeads := make([]int, cellCount)
 	for index := range bucketHeads {
@@ -62,6 +116,8 @@ func NewBoard(width, height int) *Board {
 		Cells:       make([]CellState, cellCount),
 		nextCells:   make([]CellState, cellCount),
 		bucketHeads: bucketHeads,
+		closeCounts: make([]int, cellCount),
+		farCounts:   make([]int, cellCount),
 	}
 }
 
@@ -84,6 +140,7 @@ func RandomBoard(width, height int, density float64, source *rand.Rand) *Board {
 
 func (board *Board) Step(config ContaminationConfig, source *rand.Rand) {
 	board.ensureScratch()
+	board.ensureCandidateOffsets(config.FarRadius)
 	next := board.nextCells
 	copy(next, board.Cells)
 
@@ -155,25 +212,31 @@ func (board *Board) infectionCandidateCounts(column, row int, config Contaminati
 	closeCandidates := 0
 	farCandidates := 0
 
-	minColumn := max(0, column-config.FarRadius)
-	maxColumn := min(board.Width-1, column+config.FarRadius)
-	minRow := max(0, row-config.FarRadius)
-	maxRow := min(board.Height-1, row+config.FarRadius)
-	for candidateRow := minRow; candidateRow <= maxRow; candidateRow++ {
-		for candidateColumn := minColumn; candidateColumn <= maxColumn; candidateColumn++ {
-			infectedIndex := board.bucketHeads[board.index(candidateColumn, candidateRow)]
-			if infectedIndex != -1 {
-				distance := squaredDistance(column, row, candidateColumn, candidateRow)
-				if distance <= closeRadiusSquared {
-					closeCandidates++
-				} else if distance <= farRadiusSquared {
-					farCandidates++
-				}
+	for _, offset := range board.candidateOffsets {
+		candidateColumn := column + offset.deltaColumn
+		candidateRow := row + offset.deltaRow
+		if candidateColumn < 0 || candidateColumn >= board.Width || candidateRow < 0 || candidateRow >= board.Height {
+			continue
+		}
+		infectedIndex := board.bucketHeads[candidateRow*board.Width+candidateColumn]
+		if infectedIndex != -1 {
+			if offset.distanceSq <= closeRadiusSquared {
+				closeCandidates++
+			} else if offset.distanceSq <= farRadiusSquared {
+				farCandidates++
 			}
 		}
 	}
 
 	return closeCandidates, farCandidates
+}
+
+func (board *Board) ensureCandidateOffsets(radius int) {
+	if board.candidateRadius == radius && board.candidateOffsets != nil {
+		return
+	}
+	board.candidateOffsets = buildCandidateOffsets(radius)
+	board.candidateRadius = radius
 }
 
 func (board *Board) countInfectionCandidates(config ContaminationConfig) {
@@ -189,24 +252,15 @@ func (board *Board) countInfectionCandidates(config ContaminationConfig) {
 		return
 	}
 
-	var waitGroup sync.WaitGroup
+	candidatePoolOnce.Do(startCandidatePool)
 	chunkSize := (len(board.Cells) + workerCount - 1) / workerCount
-	waitGroup.Add(workerCount)
+	board.candidateWaitGroup.Add(workerCount)
 	for worker := 0; worker < workerCount; worker++ {
 		start := worker * chunkSize
 		end := min(len(board.Cells), start+chunkSize)
-		go func() {
-			defer waitGroup.Done()
-			for index := start; index < end; index++ {
-				if board.Cells[index] != CellHealthy {
-					continue
-				}
-				column, row := board.coordinates(index)
-				board.closeCounts[index], board.farCounts[index] = board.infectionCandidateCounts(column, row, config)
-			}
-		}()
+		candidateJobs <- candidateJob{board: board, config: config, start: start, end: end, waitGroup: &board.candidateWaitGroup}
 	}
-	waitGroup.Wait()
+	board.candidateWaitGroup.Wait()
 }
 
 func (board *Board) ensureScratch() {
@@ -227,6 +281,24 @@ func squaredDistance(columnA, rowA, columnB, rowB int) int {
 	columnDelta := columnA - columnB
 	rowDelta := rowA - rowB
 	return columnDelta*columnDelta + rowDelta*rowDelta
+}
+
+func buildCandidateOffsets(radius int) []candidateOffset {
+	offsets := make([]candidateOffset, 0, (2*radius+1)*(2*radius+1))
+	radiusSquared := radius * radius
+	for deltaRow := -radius; deltaRow <= radius; deltaRow++ {
+		for deltaColumn := -radius; deltaColumn <= radius; deltaColumn++ {
+			distanceSquared := deltaColumn*deltaColumn + deltaRow*deltaRow
+			if distanceSquared <= radiusSquared {
+				offsets = append(offsets, candidateOffset{
+					deltaColumn: deltaColumn,
+					deltaRow:    deltaRow,
+					distanceSq:  distanceSquared,
+				})
+			}
+		}
+	}
+	return offsets
 }
 
 func (board *Board) coordinates(index int) (int, int) {

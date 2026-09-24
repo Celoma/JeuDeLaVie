@@ -54,6 +54,53 @@ function Get-Stats {
     }
 }
 
+function Get-SystemMemorySnapshot {
+    try {
+        $operatingSystem = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $totalBytes = [int64]$operatingSystem.TotalVisibleMemorySize * 1KB
+        $availableBytes = [int64]$operatingSystem.FreePhysicalMemory * 1KB
+        return [ordered]@{
+            totalBytes = $totalBytes
+            availableBytes = $availableBytes
+            usedBytes = $totalBytes - $availableBytes
+        }
+    } catch {
+        return $null
+    }
+}
+
+function Invoke-WithMemorySampling {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList
+    )
+
+    $outputPath = Join-Path $env:TEMP "benchmark-memory-$([guid]::NewGuid()).out"
+    $errorPath = Join-Path $env:TEMP "benchmark-memory-$([guid]::NewGuid()).err"
+    try {
+        $process = Start-Process -FilePath $FilePath -ArgumentList ($ArgumentList -join ' ') `
+            -RedirectStandardOutput $outputPath -RedirectStandardError $errorPath -PassThru
+        $peakWorkingSet = [int64]0
+        $peakPrivateBytes = [int64]0
+        while (-not $process.HasExited) {
+            $process.Refresh()
+            if ($process.WorkingSet64 -gt $peakWorkingSet) { $peakWorkingSet = $process.WorkingSet64 }
+            if ($process.PrivateMemorySize64 -gt $peakPrivateBytes) { $peakPrivateBytes = $process.PrivateMemorySize64 }
+            Start-Sleep -Milliseconds 50
+        }
+        $process.Refresh()
+        if ($process.WorkingSet64 -gt $peakWorkingSet) { $peakWorkingSet = $process.WorkingSet64 }
+        if ($process.PrivateMemorySize64 -gt $peakPrivateBytes) { $peakPrivateBytes = $process.PrivateMemorySize64 }
+        return [ordered]@{
+            peakWorkingSetBytes = $peakWorkingSet
+            peakPrivateBytes = $peakPrivateBytes
+            exitCode = $process.ExitCode
+        }
+    } finally {
+        Remove-Item $outputPath, $errorPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $benchmarkName = 'BenchmarkTick'
 $benchmarkPattern = '^BenchmarkTick$'
 $benchmarkCommand = "go test ./game -run '^$' -bench '$benchmarkPattern' -benchmem -count 1"
@@ -63,6 +110,8 @@ $goos = $null
 $goarch = $null
 $cpu = $null
 $benchmarkResults = @{}
+$systemMemory = Get-SystemMemorySnapshot
+$processMemory = $null
 
 for ($warmupIndex = 1; $warmupIndex -le $Warmup; $warmupIndex++) {
     & go test ./game -run '^$' -bench "$benchmarkPattern" -benchmem -count 1 | Out-Null
@@ -123,6 +172,9 @@ foreach ($benchmarkEntry in $benchmarkResults.GetEnumerator()) {
         nsPerOp = $nsStats.Mean
         bytesPerOp = $bytesStats.Mean
         allocsPerOp = $allocStats.Mean
+        nsSamples = @($samples | ForEach-Object { $_.NsPerOp })
+        bytesSamples = @($samples | ForEach-Object { $_.BytesPerOp })
+        allocsSamples = @($samples | ForEach-Object { $_.AllocsPerOp })
     }
 }
 
@@ -137,6 +189,7 @@ $report = [ordered]@{
         goos = $goos
         goarch = $goarch
         cpu = $cpu
+        systemMemory = $systemMemory
     }
     results = $resultReports
 }
@@ -176,11 +229,18 @@ if ($hyperfine) {
     }
     $report.configuration.hyperfineAvailable = $true
     $report.configuration.hyperfineReport = [System.IO.Path]::GetFileName($hyperfinePath)
+    $hyperfineData = Get-Content $hyperfinePath -Raw | ConvertFrom-Json
+    $hyperfineMemory = @($hyperfineData.results[0].memory_usage_byte)
+    if ($hyperfineMemory.Count -eq 0 -or ($hyperfineMemory | Where-Object { $_ -gt 0 }).Count -eq 0) {
+        $processMemory = Invoke-WithMemorySampling -FilePath 'go' -ArgumentList @('test', './game', '-run', '^$', '-bench', '^BenchmarkTick$', '-benchmem', '-benchtime=1s')
+    }
 } else {
     $report.configuration.hyperfineAvailable = $false
     $report.configuration.hyperfineReport = $null
+    $processMemory = Invoke-WithMemorySampling -FilePath 'go' -ArgumentList @('test', './game', '-run', '^$', '-bench', '^BenchmarkTick$', '-benchmem', '-benchtime=1s')
     Write-Warning "Hyperfine n'est pas installé : rapport Go généré sans comparaison Hyperfine."
 }
+$report.configuration.processMemory = $processMemory
 
 $report | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding utf8
 
