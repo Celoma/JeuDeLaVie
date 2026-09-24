@@ -91,6 +91,16 @@ Ou, sous PowerShell :
 .\benchmark.ps1
 ```
 
+Pour mesurer une grande carte sans lancer le serveur ni afficher la simulation :
+
+```powershell
+.\benchmark.ps1 -Runs 5 -Warmup 2 -BenchmarkWidth 1200 -BenchmarkHeight 1200 -BenchmarkDensity 0.25
+```
+
+Le benchmark utilise directement `go test`, produit les profils CPU/mémoire,
+le rapport Hyperfine et le PDF. Les dimensions et la densité sont enregistrées
+dans le rapport généré.
+
 Le script crée `benchmarks/latest.json` pour l'application, `benchmarks/latest.md` pour le dernier résultat et une archive Markdown horodatée `benchmarks/benchmark-YYYYMMDD-HHmmssfff.md` à chaque exécution. Il produit aussi deux profils `pprof` horodatés (`cpu-*.prof` et `memory-*.prof`) et, si Hyperfine est installé, un export `hyperfine-*.json`. Le panneau « Dernier benchmark » de l'interface affiche automatiquement le contenu du rapport JSON au prochain chargement, puis ajoute des latences API mesurées en direct pour `/api/simulation`, `/api/tick` et `/api/reset`.
 
 À la fin de chaque exécution, `generate_benchmark.py` génère également `benchmarks/pdf/benchmark-report-*.pdf` à partir des profils et des résultats les plus récents. Le PDF contient les mesures CPU `pprof`, les allocations mémoire `pprof`, le heap Go vivant (`inuse_space`), la RAM physique totale/disponible/utilisée au lancement, la mémoire par opération (`B/op`), les allocations par opération, la dispersion de chaque run Go, les temps individuels Hyperfine, la variation, la trace détaillée du GC (`gc-*.log`) et les graphes pprof si Graphviz est disponible. Hyperfine peut aussi fournir le RSS du processus ; si le backend Windows renvoie zéro, le script mesure en secours le `WorkingSet` et la mémoire privée de la commande Go. Les fichiers bruts (`.md`, `.json`, `.prof` et `.log`) restent ignorés par Git ; seuls les rapports PDF peuvent être versionnés.

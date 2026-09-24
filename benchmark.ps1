@@ -1,6 +1,9 @@
 param(
     [int]$Runs = 3,
-    [int]$Warmup = 1
+    [int]$Warmup = 1,
+    [int]$BenchmarkWidth = 600,
+    [int]$BenchmarkHeight = 600,
+    [double]$BenchmarkDensity = 0.25
 )
 
 function Get-Percentile {
@@ -103,8 +106,9 @@ function Invoke-WithMemorySampling {
 
 $benchmarkName = 'BenchmarkTick'
 $benchmarkPattern = '^BenchmarkTick$'
-$benchmarkCommand = "go test ./game -run '^$' -bench '$benchmarkPattern' -benchmem -count 1"
-$hyperfineCommand = 'go test ./game -run=^$ -bench=^BenchmarkTick$ -benchmem -benchtime=1s'
+$benchmarkCommand = "go test ./game -run '^$' -bench '$benchmarkPattern' -benchmem -count 1 (BENCHMARK_WIDTH=$BenchmarkWidth BENCHMARK_HEIGHT=$BenchmarkHeight BENCHMARK_DENSITY=$BenchmarkDensity)"
+$goBenchmarkArguments = @('./game', '-run', '^$', '-bench', $benchmarkPattern, '-benchmem', '-count', '1')
+$hyperfineArguments = @('./game', '-run=^$', '-bench=^BenchmarkTick$', '-benchmem', '-benchtime=1s')
 $benchmarks = @()
 $goos = $null
 $goarch = $null
@@ -112,16 +116,19 @@ $cpu = $null
 $benchmarkResults = @{}
 $systemMemory = Get-SystemMemorySnapshot
 $processMemory = $null
+$env:BENCHMARK_WIDTH = [string]$BenchmarkWidth
+$env:BENCHMARK_HEIGHT = [string]$BenchmarkHeight
+$env:BENCHMARK_DENSITY = [string]$BenchmarkDensity
 
 for ($warmupIndex = 1; $warmupIndex -le $Warmup; $warmupIndex++) {
-    & go test ./game -run '^$' -bench "$benchmarkPattern" -benchmem -count 1 | Out-Null
+    & go test @goBenchmarkArguments | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Warmup benchmark failed"
     }
 }
 
 for ($runIndex = 1; $runIndex -le $Runs; $runIndex++) {
-    $output = & go test ./game -run '^$' -bench "$benchmarkPattern" -benchmem -count 1 2>&1
+    $output = & go test @goBenchmarkArguments 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Benchmark run $runIndex failed"
     }
@@ -189,6 +196,9 @@ $report = [ordered]@{
         goos = $goos
         goarch = $goarch
         cpu = $cpu
+        benchmarkWidth = $BenchmarkWidth
+        benchmarkHeight = $BenchmarkHeight
+        benchmarkDensity = $BenchmarkDensity
         systemMemory = $systemMemory
     }
     results = $resultReports
@@ -209,7 +219,7 @@ $hyperfinePath = Join-Path $benchmarksDir "hyperfine-$timestamp.json"
 try {
     $previousGodebug = $env:GODEBUG
     $env:GODEBUG = 'gctrace=1'
-    $profileOutput = & go test ./game -run '^$' -bench "$benchmarkPattern" -benchmem -count 1 -cpuprofile $profilePath -memprofile $memoryProfilePath 2>&1 | Tee-Object -FilePath $gcLogPath
+    $profileOutput = & go test @goBenchmarkArguments -cpuprofile $profilePath -memprofile $memoryProfilePath 2>&1 | Tee-Object -FilePath $gcLogPath
     if ($LASTEXITCODE -ne 0) {
         throw "CPU profile failed: $($profileOutput -join [Environment]::NewLine)"
     }
@@ -223,7 +233,7 @@ try {
 
 $hyperfine = Get-Command hyperfine -ErrorAction SilentlyContinue
 if ($hyperfine) {
-    & hyperfine --warmup $Warmup --runs $Runs --export-json $hyperfinePath $hyperfineCommand | Out-Null
+    & hyperfine --warmup $Warmup --runs $Runs --export-json $hyperfinePath -- "go test $($hyperfineArguments -join ' ')" | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Hyperfine benchmark failed"
     }
@@ -232,12 +242,12 @@ if ($hyperfine) {
     $hyperfineData = Get-Content $hyperfinePath -Raw | ConvertFrom-Json
     $hyperfineMemory = @($hyperfineData.results[0].memory_usage_byte)
     if ($hyperfineMemory.Count -eq 0 -or ($hyperfineMemory | Where-Object { $_ -gt 0 }).Count -eq 0) {
-        $processMemory = Invoke-WithMemorySampling -FilePath 'go' -ArgumentList @('test', './game', '-run', '^$', '-bench', '^BenchmarkTick$', '-benchmem', '-benchtime=1s')
+        $processMemory = Invoke-WithMemorySampling -FilePath 'go' -ArgumentList (@('test') + $hyperfineArguments)
     }
 } else {
     $report.configuration.hyperfineAvailable = $false
     $report.configuration.hyperfineReport = $null
-    $processMemory = Invoke-WithMemorySampling -FilePath 'go' -ArgumentList @('test', './game', '-run', '^$', '-bench', '^BenchmarkTick$', '-benchmem', '-benchtime=1s')
+    $processMemory = Invoke-WithMemorySampling -FilePath 'go' -ArgumentList (@('test') + $hyperfineArguments)
     Write-Warning "Hyperfine n'est pas installé : rapport Go généré sans comparaison Hyperfine."
 }
 $report.configuration.processMemory = $processMemory
@@ -261,7 +271,7 @@ Profils : ``$([System.IO.Path]::GetFileName($profilePath))`` (CPU), ``$([System.
 | Mémoire | ``$([System.IO.Path]::GetFileName($memoryProfilePath))`` |
 | GC détaillé | ``$([System.IO.Path]::GetFileName($gcLogPath))`` |
 
-## Résultat du tick sur la carte 600 × 600
+## Résultat du tick sur la carte $BenchmarkWidth × $BenchmarkHeight
 
 | Benchmark | Moyenne | P95 | ns/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -269,8 +279,8 @@ $(($resultReports | ForEach-Object { "| $($_.name) | $([math]::Round($_.meanSeco
 
 ## Notes
 
-- Mesure du calcul du tick sur une carte 600 × 600.
-- La carte et le générateur aléatoire utilisent toujours la seed 42.
+- Mesure du calcul du tick sur une carte $BenchmarkWidth × $BenchmarkHeight.
+- Densité de la carte : $BenchmarkDensity ; seed : 42.
 - La latence API est mesurée à part dans le frontend, sans rendu canvas.
 - La trace GC détaillée est enregistrée dans le fichier ``gc-*.log`` et résumée dans le PDF.
 - Les métriques I/O, réseau et base de données ne sont pas instrumentées dans ce benchmark.

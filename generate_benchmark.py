@@ -456,6 +456,9 @@ def build_pdf(out_pdf, ctx):
         meta_rows.append(["Plateforme", f"{cfg.get('goos','?')}/{cfg.get('goarch','?')}"])
     if cfg.get("cpu"):
         meta_rows.append(["Processeur", cfg["cpu"].strip()])
+    if cfg.get("benchmarkWidth") and cfg.get("benchmarkHeight"):
+        density = cfg.get("benchmarkDensity", "n/a")
+        meta_rows.append(["Carte benchmark", f"{cfg['benchmarkWidth']} × {cfg['benchmarkHeight']} (densité {density})"])
     if ctx.get("cpu_prof"):
         meta_rows.append(["Profil CPU", os.path.basename(ctx["cpu_prof"])])
     if ctx.get("mem_prof"):
@@ -493,7 +496,12 @@ def build_pdf(out_pdf, ctx):
         memory_samples = hres.get("memory_usage_byte") or []
         if times:
             hf_rows.append(["Runs mesurés", str(len(times))])
-            hf_rows.append(["Coefficient de variation", f"{(hres.get('stddev', 0) / hres.get('mean', 1) * 100):.2f}%"])
+            mean = hres.get("mean")
+            stddev = hres.get("stddev")
+            if isinstance(mean, (int, float)) and mean > 0 and isinstance(stddev, (int, float)):
+                hf_rows.append(["Coefficient de variation", f"{(stddev / mean * 100):.2f}%"])
+            else:
+                hf_rows.append(["Coefficient de variation", "n/a"])
         if memory_samples and any(memory_samples):
             hf_rows.append(["Pic mémoire Hyperfine", f"{max(memory_samples) / 1024 / 1024:.2f} MiB"])
         elif cfg.get("processMemory", {}).get("peakWorkingSetBytes"):
