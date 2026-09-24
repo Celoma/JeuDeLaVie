@@ -1,0 +1,23 @@
+{
+  "results": [
+    {
+      "command": "go test ./game -run=^$ -bench=^BenchmarkTick$ -benchmem -benchtime=1s",
+      "mean": 4.978549342,
+      "stddev": null,
+      "median": 4.978549342,
+      "user": 19.2103125,
+      "system": 1.0275,
+      "min": 4.978549342,
+      "max": 4.978549342,
+      "times": [
+        4.978549342
+      ],
+      "memory_usage_byte": [
+        0
+      ],
+      "exit_codes": [
+        0
+      ]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+﻿{
+    "generatedAt":  "2026-09-24T14:01:22.0607703Z",
+    "configuration":  {
+                          "runs":  1,
+                          "warmup":  0,
+                          "sampleCount":  1,
+                          "command":  "go test ./game -run \u0027^$\u0027 -bench \u0027^BenchmarkTick$\u0027 -benchmem -count 1 (BENCHMARK_WIDTH=600 BENCHMARK_HEIGHT=600 BENCHMARK_DENSITY=0.25)",
+                          "hyperfine":  null,
+                          "goos":  "windows",
+                          "goarch":  "amd64",
+                          "cpu":  "AMD Ryzen 7 7735HS with Radeon Graphics        ",
+                          "benchmarkWidth":  600,
+                          "benchmarkHeight":  600,
+                          "benchmarkDensity":  0.25,
+                          "systemMemory":  {
+                                               "totalBytes":  33618173952,
+                                               "availableBytes":  13604483072,
+                                               "usedBytes":  20013690880
+                                           },
+                          "hyperfineAvailable":  true,
+                          "hyperfineReport":  "hyperfine-20260924-140122062.json",
+                          "processMemory":  {
+                                                "peakWorkingSetBytes":  27918336,
+                                                "peakPrivateBytes":  63582208,
+                                                "exitCode":  null
+                                            }
+                      },
+    "results":  [
+                    {
+                        "name":  "BenchmarkTick-16",
+                        "meanSeconds":  0.012395032,
+                        "medianSeconds":  0.012395032,
+                        "minSeconds":  0.012395032,
+                        "maxSeconds":  0.012395032,
+                        "p95Seconds":  0.012395032,
+                        "p99Seconds":  0.012395032,
+                        "stddevSeconds":  0,
+                        "throughputOpsPerSecond":  80.6774843340461,
+                        "nsPerOp":  12395032,
+                        "bytesPerOp":  3,
+                        "allocsPerOp":  0,
+                        "nsSamples":  [
+                                          12395032
+                                      ],
+                        "bytesSamples":  [
+                                             3
+                                         ],
+                        "allocsSamples":  [
+                                              0
+                                          ]
+                    }
+                ]
+}
