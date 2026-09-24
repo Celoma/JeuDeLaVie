@@ -44,10 +44,15 @@ type PopulationMap struct {
 	Seed        int64        `json:"seed"`
 	Settlements []Settlement `json:"settlements"`
 	People      []Person     `json:"people"`
+
+	infectedIndices []int
+	infectedHeads   []int
+	nextInfected    []int
 }
 
 func (populationMap *PopulationMap) Step(config ContaminationConfig, source *rand.Rand) {
-	infected := make([]int, 0)
+	populationMap.ensureScratch()
+	infected := populationMap.infectedIndices[:0]
 	for index, person := range populationMap.People {
 		if !person.Infected || person.Dead {
 			continue
@@ -64,30 +69,49 @@ func (populationMap *PopulationMap) Step(config ContaminationConfig, source *ran
 		}
 		infected = append(infected, index)
 	}
+	for index := range populationMap.infectedHeads {
+		populationMap.infectedHeads[index] = -1
+	}
+	for _, infectedIndex := range infected {
+		person := populationMap.People[infectedIndex]
+		bucket := populationMap.index(person.X, person.Y)
+		populationMap.nextInfected[infectedIndex] = populationMap.infectedHeads[bucket]
+		populationMap.infectedHeads[bucket] = infectedIndex
+	}
 
 	for index, person := range populationMap.People {
 		if person.Infected || person.Dead || person.Immune {
 			continue
 		}
-		if populationMap.shouldInfect(index, infected, config, source) {
+		if populationMap.shouldInfect(index, config, source) {
 			populationMap.People[index].Infected = true
 		}
 	}
 }
 
-func (populationMap *PopulationMap) shouldInfect(index int, infected []int, config ContaminationConfig, source *rand.Rand) bool {
+func (populationMap *PopulationMap) shouldInfect(index int, config ContaminationConfig, source *rand.Rand) bool {
 	closeCandidates := 0
 	farCandidates := 0
 	target := populationMap.People[index]
 	closeRadiusSquared := config.CloseRadius * config.CloseRadius
 	farRadiusSquared := config.FarRadius * config.FarRadius
-	for _, infectedIndex := range infected {
-		infectedPerson := populationMap.People[infectedIndex]
-		distance := squaredDistance(target.X, target.Y, infectedPerson.X, infectedPerson.Y)
-		if distance <= closeRadiusSquared {
-			closeCandidates++
-		} else if distance <= farRadiusSquared {
-			farCandidates++
+	minX := max(0, target.X-config.FarRadius)
+	maxX := min(populationMap.Width-1, target.X+config.FarRadius)
+	minY := max(0, target.Y-config.FarRadius)
+	maxY := min(populationMap.Height-1, target.Y+config.FarRadius)
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			infectedIndex := populationMap.infectedHeads[populationMap.index(x, y)]
+			for infectedIndex != -1 {
+				infectedPerson := populationMap.People[infectedIndex]
+				distance := squaredDistance(target.X, target.Y, infectedPerson.X, infectedPerson.Y)
+				if distance <= closeRadiusSquared {
+					closeCandidates++
+				} else if distance <= farRadiusSquared {
+					farCandidates++
+				}
+				infectedIndex = populationMap.nextInfected[infectedIndex]
+			}
 		}
 	}
 	chance := config.FarChance
@@ -103,6 +127,24 @@ func (populationMap *PopulationMap) shouldInfect(index int, infected []int, conf
 		}
 	}
 	return false
+}
+
+func (populationMap *PopulationMap) ensureScratch() {
+	peopleCount := len(populationMap.People)
+	cellCount := populationMap.Width * populationMap.Height
+	if cap(populationMap.infectedIndices) == peopleCount && len(populationMap.infectedHeads) == cellCount && len(populationMap.nextInfected) == peopleCount {
+		return
+	}
+	populationMap.infectedIndices = make([]int, 0, peopleCount)
+	populationMap.infectedHeads = make([]int, cellCount)
+	populationMap.nextInfected = make([]int, peopleCount)
+	for index := range populationMap.infectedHeads {
+		populationMap.infectedHeads[index] = -1
+	}
+}
+
+func (populationMap *PopulationMap) index(x, y int) int {
+	return y*populationMap.Width + x
 }
 
 func GeneratePopulationMap(width, height int, seed int64) *PopulationMap {
@@ -133,12 +175,23 @@ func GeneratePopulationMap(width, height int, seed int64) *PopulationMap {
 	people[source.Intn(len(people))].Infected = true
 
 	return &PopulationMap{
-		Width:       width,
-		Height:      height,
-		Seed:        seed,
-		Settlements: settlements,
-		People:      people,
+		Width:           width,
+		Height:          height,
+		Seed:            seed,
+		Settlements:     settlements,
+		People:          people,
+		infectedIndices: make([]int, 0, len(people)),
+		infectedHeads:   newInfectedHeads(width * height),
+		nextInfected:    make([]int, len(people)),
 	}
+}
+
+func newInfectedHeads(size int) []int {
+	head := make([]int, size)
+	for index := range head {
+		head[index] = -1
+	}
+	return head
 }
 
 func familyCount(width, height int) int {

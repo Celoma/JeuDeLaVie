@@ -285,7 +285,7 @@
         map = board;
         updateStats();
         draw();
-        await loadSimulation();
+        updateSimulationStats({ tick: simulationTick + 1, map: board });
       } else {
         updateSimulationStats({ tick: simulationTick + 1, board });
       }
@@ -301,7 +301,7 @@
       map = board;
       updateStats();
       draw();
-      await loadSimulation();
+      updateSimulationStats({ tick: 0, map: board });
     } else {
       updateSimulationStats({ tick: 0, board });
     }
@@ -360,7 +360,7 @@
       map = await resetResponse.json();
       updateStats();
       draw();
-      await loadSimulation();
+      updateSimulationStats({ tick: 0, map });
       feedback.textContent = 'Nouvelle partie prête';
     } catch (error) {
       feedback.textContent = `Erreur : ${error.message}`;

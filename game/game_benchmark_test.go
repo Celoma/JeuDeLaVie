@@ -20,3 +20,14 @@ func BenchmarkTick(b *testing.B) {
 		board.Step(rules, source)
 	}
 }
+
+func BenchmarkPopulationMapTick(b *testing.B) {
+	rules := ContaminationConfig{CloseRadius: 2, CloseChance: 0.5, FarRadius: 15, FarChance: 0.15}
+	populationMap := GeneratePopulationMap(GeneratedMapWidth, GeneratedMapHeight, GeneratedMapSeed)
+	source := rand.New(rand.NewSource(GeneratedMapSeed))
+
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		populationMap.Step(rules, source)
+	}
+}
