@@ -29,6 +29,9 @@ type Board struct {
 	Width  int         `json:"width"`
 	Height int         `json:"height"`
 	Cells  []CellState `json:"cells"`
+
+	nextCells   []CellState
+	bucketHeads []int
 }
 
 func (board Board) MarshalJSON() ([]byte, error) {
@@ -44,10 +47,17 @@ func (board Board) MarshalJSON() ([]byte, error) {
 }
 
 func NewBoard(width, height int) *Board {
+	cellCount := width * height
+	bucketHeads := make([]int, cellCount)
+	for index := range bucketHeads {
+		bucketHeads[index] = -1
+	}
 	return &Board{
-		Width:  width,
-		Height: height,
-		Cells:  make([]CellState, width*height),
+		Width:       width,
+		Height:      height,
+		Cells:       make([]CellState, cellCount),
+		nextCells:   make([]CellState, cellCount),
+		bucketHeads: bucketHeads,
 	}
 }
 
@@ -69,7 +79,8 @@ func RandomBoard(width, height int, density float64, source *rand.Rand) *Board {
 }
 
 func (board *Board) Step(config ContaminationConfig, source *rand.Rand) {
-	next := make([]CellState, len(board.Cells))
+	board.ensureScratch()
+	next := board.nextCells
 	copy(next, board.Cells)
 
 	for index, cell := range board.Cells {
@@ -89,11 +100,14 @@ func (board *Board) Step(config ContaminationConfig, source *rand.Rand) {
 		}
 	}
 
-	infectedPositions := make([]int, 0)
-	for index := range board.Cells {
-		if next[index] == CellInfected {
-			infectedPositions = append(infectedPositions, index)
+	for index := range board.bucketHeads {
+		board.bucketHeads[index] = -1
+	}
+	for index, cell := range next {
+		if cell != CellInfected {
+			continue
 		}
+		board.bucketHeads[index] = index
 	}
 
 	for index, cell := range board.Cells {
@@ -101,32 +115,35 @@ func (board *Board) Step(config ContaminationConfig, source *rand.Rand) {
 			continue
 		}
 		column, row := board.coordinates(index)
-		if board.shouldInfect(column, row, infectedPositions, config, source) {
+		if board.shouldInfect(column, row, config, source) {
 			next[index] = CellInfected
 		}
 	}
 
-	board.Cells = next
+	board.Cells, board.nextCells = next, board.Cells
 }
 
-func (board *Board) shouldInfect(column, row int, infectedPositions []int, config ContaminationConfig, source *rand.Rand) bool {
+func (board *Board) shouldInfect(column, row int, config ContaminationConfig, source *rand.Rand) bool {
 	closeRadiusSquared := config.CloseRadius * config.CloseRadius
 	farRadiusSquared := config.FarRadius * config.FarRadius
 	closeCandidates := 0
 	farCandidates := 0
 
-	for _, infectedIndex := range infectedPositions {
-		infectedColumn, infectedRow := board.coordinates(infectedIndex)
-		distance := squaredDistance(column, row, infectedColumn, infectedRow)
-		if distance == 0 {
-			continue
-		}
-		if distance <= closeRadiusSquared {
-			closeCandidates++
-			continue
-		}
-		if distance <= farRadiusSquared {
-			farCandidates++
+	minColumn := max(0, column-config.FarRadius)
+	maxColumn := min(board.Width-1, column+config.FarRadius)
+	minRow := max(0, row-config.FarRadius)
+	maxRow := min(board.Height-1, row+config.FarRadius)
+	for candidateRow := minRow; candidateRow <= maxRow; candidateRow++ {
+		for candidateColumn := minColumn; candidateColumn <= maxColumn; candidateColumn++ {
+			infectedIndex := board.bucketHeads[board.index(candidateColumn, candidateRow)]
+			if infectedIndex != -1 {
+				distance := squaredDistance(column, row, candidateColumn, candidateRow)
+				if distance <= closeRadiusSquared {
+					closeCandidates++
+				} else if distance <= farRadiusSquared {
+					farCandidates++
+				}
+			}
 		}
 	}
 
@@ -144,6 +161,18 @@ func (board *Board) shouldInfect(column, row int, infectedPositions []int, confi
 		}
 	}
 	return false
+}
+
+func (board *Board) ensureScratch() {
+	cellCount := len(board.Cells)
+	if len(board.nextCells) == cellCount && len(board.bucketHeads) == cellCount {
+		return
+	}
+	board.nextCells = make([]CellState, cellCount)
+	board.bucketHeads = make([]int, cellCount)
+	for index := range board.bucketHeads {
+		board.bucketHeads[index] = -1
+	}
 }
 
 func squaredDistance(columnA, rowA, columnB, rowB int) int {
